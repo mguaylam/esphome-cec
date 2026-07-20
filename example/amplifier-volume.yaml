@@ -1,0 +1,132 @@
+# Example: read and control an HDMI-CEC amplifier's volume.
+#
+# Wiring: HDMI pin 13 (CEC) → GPIO4, HDMI pin 17 (ground) → GND.
+#
+# The amplifier is assumed to sit at logical address 5, which is where CEC
+# audio systems live. This component talks from logical address 8 (Playback 2).
+#
+# Verified against a Yamaha RX-V375. Read the "warning about real devices"
+# section of the README before wiring this to your own amplifier.
+
+esphome:
+  name: cec-example
+  on_boot:
+    - lambda: |-
+        id(cec_bus)->set_frame_handler(
+          [](uint8_t initiator, uint8_t destination, const std::vector<uint8_t> &data) {
+            if (data.empty() || initiator != 0x5)
+              return;
+            switch (data[0]) {
+              // Report Audio Status: bit 7 is mute, bits 0-6 are volume 0-100.
+              // Amplifiers also broadcast this to the TV after every change,
+              // which gives free asynchronous feedback with no polling.
+              case 0x7A:
+                if (data.size() >= 2) {
+                  id(amp_volume).publish_state(data[1] & 0x7F);
+                  id(amp_mute).publish_state((data[1] & 0x80) != 0);
+                }
+                break;
+              // Report Power Status: 0x00 = on, 0x01 = standby.
+              case 0x90:
+                if (data.size() >= 2)
+                  id(amp_power).publish_state(data[1] == 0x00 || data[1] == 0x02);
+                break;
+            }
+          });
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      # Required: the receiver ACK starts and stops a gptimer from ISR context.
+      CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM: "y"
+
+logger:
+api:
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/mguaylam/esphome-cec
+    components: [hdmi_cec_rmt]
+
+hdmi_cec_rmt:
+  id: cec_bus
+  pin: 4
+
+sensor:
+  - platform: template
+    name: "Amplifier volume"
+    id: amp_volume
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+
+binary_sensor:
+  - platform: template
+    name: "Amplifier on"
+    id: amp_power
+    device_class: power
+
+  - platform: template
+    name: "Amplifier muted"
+    id: amp_mute
+
+script:
+  # One volume step: press, hold briefly, release. mode: single prevents two
+  # overlapping steps. The trailing delay keeps the command rate down —
+  # old amplifiers do not cope well with bursts.
+  - id: volume_step
+    mode: single
+    parameters:
+      up: bool
+    then:
+      - lambda: 'id(cec_bus)->send(5, {0x44, (uint8_t)(up ? 0x41 : 0x42)});'
+      - delay: 100ms
+      - lambda: 'id(cec_bus)->send(5, {0x45});'
+      - delay: 700ms
+
+button:
+  - platform: template
+    name: "Volume up"
+    on_press:
+      - script.execute:
+          id: volume_step
+          up: true
+
+  - platform: template
+    name: "Volume down"
+    on_press:
+      - script.execute:
+          id: volume_step
+          up: false
+
+  - platform: template
+    name: "Mute"
+    on_press:
+      - lambda: 'id(cec_bus)->send(5, {0x44, 0x43});'
+      - delay: 100ms
+      - lambda: 'id(cec_bus)->send(5, {0x45});'
+
+  - platform: template
+    name: "Standby"
+    on_press:
+      - lambda: 'id(cec_bus)->send(5, {0x36});'
+
+interval:
+  # Poll power state, and volume only when the amplifier is awake.
+  - interval: 30s
+    then:
+      - lambda: 'id(cec_bus)->send(5, {0x8F});'  # Give Device Power Status
+      - delay: 500ms
+      - if:
+          condition:
+            lambda: 'return id(amp_power).state;'
+          then:
+            - lambda: 'id(cec_bus)->send(5, {0x71});'  # Give Audio Status
