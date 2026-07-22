@@ -10,10 +10,30 @@
 #include <freertos/task.h>
 
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace esphome {
-namespace hdmi_cec_rmt {
+namespace hdmi_cec {
+
+// CEC device types. Each type owns a pool of logical addresses; at startup the
+// component claims the first free one in the pool (see negotiate_address_).
+enum DeviceType : uint8_t {
+  DEVICE_TYPE_TV = 0,
+  DEVICE_TYPE_RECORDER,
+  DEVICE_TYPE_TUNER,
+  DEVICE_TYPE_PLAYBACK,
+  DEVICE_TYPE_AUDIO_SYSTEM,
+  DEVICE_TYPE_SWITCH,
+};
+
+// Logical address 0xF: "unregistered" — listen only, never owns the bus. Also
+// the broadcast destination, so it is never a valid address to acknowledge.
+static constexpr uint8_t ADDRESS_UNREGISTERED = 0x0F;
+// physical_address sentinel: nothing configured, advertise nothing.
+static constexpr uint16_t PHYSICAL_ADDRESS_NONE = 0xFFFF;
+// address override sentinel: no explicit address set → negotiate one.
+static constexpr uint8_t ADDRESS_AUTO = 0xFF;
 
 // A CEC frame is at most 16 blocks of 10 bits plus the start bit
 // → ~161 low/high pairs. 192 symbols leaves comfortable headroom.
@@ -35,9 +55,35 @@ struct DecodedFrame {
   uint8_t bytes[16];
 };
 
-class HdmiCecRmt : public Component {
+// A logical address given a human-readable name in the configuration, so the
+// rest of the config (and the higher layers) can refer to "avr" instead of 0x5.
+struct NamedDevice {
+  std::string name;
+  uint8_t address;
+};
+
+class HdmiCec : public Component {
  public:
+  // ── Configuration (set from __init__.py) ─────────────────────────────────
   void set_pin(uint8_t pin) { this->pin_ = pin; }
+  void set_device_type(DeviceType type) { this->device_type_ = type; }
+  // Explicit logical address; skips negotiation (ADDRESS_AUTO = negotiate).
+  void set_address_override(uint8_t address) { this->address_override_ = address; }
+  void set_physical_address(uint16_t address) { this->physical_address_ = address; }
+  void set_osd_name(const std::string &name) { this->osd_name_ = name; }
+  void set_vendor_id(uint32_t vendor_id) { this->vendor_id_ = vendor_id; }
+  void set_auto_respond(bool enabled) { this->auto_respond_ = enabled; }
+  void set_monitor_mode(bool enabled) { this->monitor_mode_ = enabled; }
+  void set_promiscuous_mode(bool enabled) { this->promiscuous_mode_ = enabled; }
+  void set_retransmit(uint8_t attempts) { this->retransmit_ = attempts; }
+  void set_update_interval(uint32_t interval_ms) { this->update_interval_ = interval_ms; }
+  void add_device(const std::string &name, uint8_t address) { this->devices_.push_back({name, address}); }
+
+  // Resolve a configured device name to its logical address, or 0xFF if unknown.
+  // Consumed by the higher layers so their configs can speak in names.
+  uint8_t address_of(const std::string &name) const;
+  // The logical address actually in use (resolved in setup()).
+  uint8_t address() const { return this->address_; }
 
   void setup() override;
   void loop() override;
@@ -71,6 +117,17 @@ class HdmiCecRmt : public Component {
   void setup_tx_();
   void setup_ack_();
 
+  // Logical-address negotiation: probe the device type's pool and claim the
+  // first free address. Falls back to unregistered (listen-only) if the whole
+  // pool is taken or TX is unavailable.
+  void negotiate_address_();
+  // Send a header-only polling message to `addr` and return true if some device
+  // acknowledged it — i.e. the address is already taken. Blocks briefly.
+  bool poll_address_(uint8_t addr);
+  // Raw transmit shared by send_from() and poll_address_(); unlike send_from()
+  // it accepts an empty payload (a header-only polling message).
+  bool tx_frame_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload);
+
   // Dedicated task: re-arms the capture (<1 ms) and decodes. loop() was too
   // slow (period up to 16 ms): the single reply from a follower we acknowledged
   // arrives ~17 ms after our frame and kept landing in the re-arm blind spot.
@@ -82,8 +139,21 @@ class HdmiCecRmt : public Component {
   static void gpio_edge_isr(void *arg);
   static bool ack_timer_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *arg);
 
+  // ── Configuration ──
+  DeviceType device_type_{DEVICE_TYPE_PLAYBACK};
+  uint8_t address_override_{ADDRESS_AUTO};
+  uint16_t physical_address_{PHYSICAL_ADDRESS_NONE};
+  std::string osd_name_{"ESPHome"};
+  uint32_t vendor_id_{0};
+  bool auto_respond_{true};
+  bool monitor_mode_{false};
+  bool promiscuous_mode_{false};
+  uint8_t retransmit_{5};
+  uint32_t update_interval_{30000};
+  std::vector<NamedDevice> devices_;
+
   uint8_t pin_{4};
-  uint8_t address_{0x8};  // Playback 2 — assumed free, never actually claimed (see roadmap 2.3)
+  uint8_t address_{ADDRESS_UNREGISTERED};  // resolved in setup() (negotiation or override)
   rmt_channel_handle_t rx_channel_{nullptr};
   rmt_channel_handle_t tx_channel_{nullptr};
   rmt_encoder_handle_t tx_encoder_{nullptr};
@@ -100,12 +170,19 @@ class HdmiCecRmt : public Component {
 
   rmt_symbol_word_t tx_symbols_[TX_SYMBOL_CAPACITY];
 
+  // Address-probe handoff: negotiate_address_() sets probe_addr_ and waits;
+  // decode_capture_() records the acknowledgement of the matching self-capture.
+  volatile int8_t probe_addr_{-1};
+  volatile bool probe_seen_{false};
+  volatile bool probe_acked_{false};
+
   // Diagnostic counters
   uint32_t frames_decoded_{0};
   uint32_t decode_errors_{0};
   volatile uint32_t raw_events_{0};  // completed RMT captures (incremented in the ISR)
   uint32_t frames_sent_{0};
   bool dma_used_{false};
+  bool negotiated_{false};  // true if address_ came from negotiation, not an override
   esp_err_t last_arm_err_{ESP_OK};
   uint32_t last_rx_ms_{0};  // last bus activity seen by the RX task
 
@@ -121,5 +198,5 @@ class HdmiCecRmt : public Component {
   volatile uint32_t acks_sent_{0};
 };
 
-}  // namespace hdmi_cec_rmt
+}  // namespace hdmi_cec
 }  // namespace esphome

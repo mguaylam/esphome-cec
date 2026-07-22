@@ -3,10 +3,11 @@
 # Wiring: HDMI pin 13 (CEC) → GPIO4, HDMI pin 17 (ground) → GND.
 #
 # The amplifier is assumed to sit at logical address 5, which is where CEC
-# audio systems live. This component talks from logical address 8 (Playback 2).
+# audio systems live. This component declares itself as a "playback" device and
+# negotiates a free logical address from that pool at startup.
 #
-# Verified against a Yamaha RX-V375. Read the "warning about real devices"
-# section of the README before wiring this to your own amplifier.
+# Read the "note on real devices" section of the README before wiring this to
+# your own amplifier.
 
 esphome:
   name: cec-example
