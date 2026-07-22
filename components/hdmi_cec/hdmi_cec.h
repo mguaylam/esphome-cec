@@ -196,6 +196,10 @@ class HdmiCec : public Component {
     return a == 0xFF ? std::string() : this->osd_name_of(a);
   }
 
+  // Physical address of the current active source on the bus (the last device to
+  // announce Active Source), or PHYSICAL_ADDRESS_NONE. Used by the select entity.
+  uint16_t current_active_source() const { return this->current_active_source_; }
+
   // Called from the RMT driver's ISR callback.
   bool on_recv_done(const rmt_rx_done_event_data_t *edata);
 
@@ -271,6 +275,7 @@ class HdmiCec : public Component {
 
   // ── Device-state registry ──
   DeviceState states_[16];                                 // indexed by logical address
+  uint16_t current_active_source_{PHYSICAL_ADDRESS_NONE};  // last announced active source
   std::vector<std::pair<uint8_t, uint8_t>> poll_targets_;  // (address, query opcode)
   size_t poll_index_{0};
   uint32_t last_poll_ms_{0};

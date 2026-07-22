@@ -830,6 +830,7 @@ void HdmiCec::update_registry_(const Frame &frame) {
     case 0x82:  // Active Source (broadcast) — params are a physical address
       if (frame.params.size() >= 2) {
         st.active_source = (uint16_t) (frame.params[0] << 8) | frame.params[1];
+        this->current_active_source_ = st.active_source;
         ESP_LOGD(TAG, "device 0x%X active source=%04X", (unsigned) frame.from, (unsigned) st.active_source);
       }
       break;

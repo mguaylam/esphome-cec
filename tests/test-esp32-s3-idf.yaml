@@ -161,3 +161,16 @@ text_sensor:
     name: "AVR power state"
     device: avr
     type: power_state
+
+switch:
+  - platform: hdmi_cec
+    name: "TV power switch"
+    device: tv
+
+select:
+  - platform: hdmi_cec
+    name: "AVR input"
+    device: avr
+    options:
+      "Apple TV": 0x4000
+      "Blu-ray": 0x2000
