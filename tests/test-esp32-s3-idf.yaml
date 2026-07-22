@@ -1,5 +1,6 @@
-# Compile test for the hdmi_cec component (Layer 0 hub + Layer 1 named devices).
-# Exercises the full configuration surface with no C++ lambda.
+# Compile test for the hdmi_cec component.
+# Layer 0 (hub) + Layer 1 (named devices) + Layer 2 (on_frame / transmit).
+# Exercises the full configuration surface with no magic opcodes.
 esphome:
   name: hdmi-cec-test
 
@@ -27,10 +28,54 @@ hdmi_cec:
   physical_address: none
   auto_respond: true
   monitor_mode: false
-  promiscuous_mode: false
+  promiscuous_mode: true
   retransmit: 5
   update_interval: 30s
   devices:
     tv: 0x0
     avr: 0x5
     apple_tv: 0x4
+  on_frame:
+    # Named opcode + named source filter.
+    - opcode: report_audio_status
+      from: avr
+      then:
+        - logger.log:
+            format: "audio status from avr: 0x%02X"
+            args: ["frame.params.empty() ? 0 : frame.params[0]"]
+    # Keyword filter: only frames addressed to us.
+    - to: us
+      then:
+        - logger.log:
+            format: "for us: from=%u op=0x%02X broadcast=%d"
+            args: ["frame.from", "frame.opcode", "frame.is_broadcast"]
+    # No filter: every frame the promiscuous bus delivers.
+    - then:
+        - logger.log: "saw a frame"
+
+button:
+  # Structured transmit: named opcode + params, device-name destination.
+  - platform: template
+    name: "Volume up"
+    on_press:
+      - hdmi_cec.transmit:
+          to: avr
+          opcode: user_control_pressed
+          params: [0x41]
+      - hdmi_cec.transmit:
+          to: avr
+          opcode: user_control_released
+  # Broadcast keyword + named opcode.
+  - platform: template
+    name: "Standby all"
+    on_press:
+      - hdmi_cec.transmit:
+          to: broadcast
+          opcode: standby
+  # Raw escape hatch + templatable destination (lambda).
+  - platform: template
+    name: "Raw power query"
+    on_press:
+      - hdmi_cec.transmit:
+          to: !lambda "return 0x0;"
+          raw: [0x8F]
