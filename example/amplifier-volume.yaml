@@ -1,39 +1,14 @@
-# Example: read and control an HDMI-CEC amplifier's volume.
+# Example: read and control an HDMI-CEC amplifier's volume, with no C++.
 #
 # Wiring: HDMI pin 13 (CEC) → GPIO4, HDMI pin 17 (ground) → GND.
 #
-# The amplifier is assumed to sit at logical address 5, which is where CEC
-# audio systems live. This component declares itself as a "playback" device and
-# negotiates a free logical address from that pool at startup.
-#
+# The amplifier is an audio system (logical address 5). This component declares
+# itself a "playback" device and negotiates a free logical address at startup.
 # Read the "note on real devices" section of the README before wiring this to
 # your own amplifier.
 
 esphome:
   name: cec-example
-  on_boot:
-    - lambda: |-
-        id(cec_bus)->set_frame_handler(
-          [](uint8_t initiator, uint8_t destination, const std::vector<uint8_t> &data) {
-            if (data.empty() || initiator != 0x5)
-              return;
-            switch (data[0]) {
-              // Report Audio Status: bit 7 is mute, bits 0-6 are volume 0-100.
-              // Amplifiers also broadcast this to the TV after every change,
-              // which gives free asynchronous feedback with no polling.
-              case 0x7A:
-                if (data.size() >= 2) {
-                  id(amp_volume).publish_state(data[1] & 0x7F);
-                  id(amp_mute).publish_state((data[1] & 0x80) != 0);
-                }
-                break;
-              // Report Power Status: 0x00 = on, 0x01 = standby.
-              case 0x90:
-                if (data.size() >= 2)
-                  id(amp_power).publish_state(data[1] == 0x00 || data[1] == 0x02);
-                break;
-            }
-          });
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -56,78 +31,48 @@ external_components:
   - source:
       type: git
       url: https://github.com/mguaylam/esphome-cec
-    components: [hdmi_cec_rmt]
+    components: [hdmi_cec]
 
-hdmi_cec_rmt:
+hdmi_cec:
   id: cec_bus
-  pin: 4
+  pin: GPIO4
+  device_type: playback
+  devices:
+    tv: 0x0
+    avr: 0x5
 
+# The device-state registry tracks the amplifier passively (and polls it), so
+# these entities need no lambdas.
 sensor:
-  - platform: template
+  - platform: hdmi_cec
     name: "Amplifier volume"
-    id: amp_volume
-    unit_of_measurement: "%"
-    accuracy_decimals: 0
+    device: avr
+    type: audio_volume
 
 binary_sensor:
-  - platform: template
+  - platform: hdmi_cec
     name: "Amplifier on"
-    id: amp_power
-    device_class: power
-
-  - platform: template
+    device: avr
+    type: power
+  - platform: hdmi_cec
     name: "Amplifier muted"
-    id: amp_mute
-
-script:
-  # One volume step: press, hold briefly, release. mode: single prevents two
-  # overlapping steps. The trailing delay keeps the command rate down —
-  # old amplifiers do not cope well with bursts.
-  - id: volume_step
-    mode: single
-    parameters:
-      up: bool
-    then:
-      - lambda: 'id(cec_bus)->send(5, {0x44, (uint8_t)(up ? 0x41 : 0x42)});'
-      - delay: 100ms
-      - lambda: 'id(cec_bus)->send(5, {0x45});'
-      - delay: 700ms
+    device: avr
+    type: mute
 
 button:
   - platform: template
     name: "Volume up"
     on_press:
-      - script.execute:
-          id: volume_step
-          up: true
-
+      - hdmi_cec.volume: { device: avr, action: up }
   - platform: template
     name: "Volume down"
     on_press:
-      - script.execute:
-          id: volume_step
-          up: false
-
+      - hdmi_cec.volume: { device: avr, action: down }
   - platform: template
     name: "Mute"
     on_press:
-      - lambda: 'id(cec_bus)->send(5, {0x44, 0x43});'
-      - delay: 100ms
-      - lambda: 'id(cec_bus)->send(5, {0x45});'
-
+      - hdmi_cec.volume: { device: avr, action: mute }
   - platform: template
-    name: "Standby"
+    name: "Amplifier standby"
     on_press:
-      - lambda: 'id(cec_bus)->send(5, {0x36});'
-
-interval:
-  # Poll power state, and volume only when the amplifier is awake.
-  - interval: 30s
-    then:
-      - lambda: 'id(cec_bus)->send(5, {0x8F});'  # Give Device Power Status
-      - delay: 500ms
-      - if:
-          condition:
-            lambda: 'return id(amp_power).state;'
-          then:
-            - lambda: 'id(cec_bus)->send(5, {0x71});'  # Give Audio Status
+      - hdmi_cec.standby: { device: avr }
