@@ -24,6 +24,18 @@ Frame = hdmi_cec_ns.struct("Frame")
 HdmiCecFrameTrigger = hdmi_cec_ns.class_("HdmiCecFrameTrigger", automation.Trigger.template(Frame))
 TransmitAction = hdmi_cec_ns.class_("TransmitAction", automation.Action)
 
+# Layer 3 semantic triggers.
+KeyTrigger = hdmi_cec_ns.class_("KeyTrigger", automation.Trigger.template(cg.std_string, cg.uint8, cg.uint8))
+StandbyTrigger = hdmi_cec_ns.class_("StandbyTrigger", automation.Trigger.template(cg.uint8))
+ActiveSourceTrigger = hdmi_cec_ns.class_("ActiveSourceTrigger", automation.Trigger.template(cg.uint16, cg.uint8))
+VolumeTrigger = hdmi_cec_ns.class_("VolumeTrigger", automation.Trigger.template(cg.uint8, cg.bool_, cg.uint8))
+PowerTrigger = hdmi_cec_ns.class_("PowerTrigger", automation.Trigger.template(cg.bool_, cg.uint8))
+
+# Layer 3 semantic actions.
+OpcodeAction = hdmi_cec_ns.class_("OpcodeAction", automation.Action)
+KeyPressAction = hdmi_cec_ns.class_("KeyPressAction", automation.Action)
+ActiveSourceAction = hdmi_cec_ns.class_("ActiveSourceAction", automation.Action)
+
 DeviceType = hdmi_cec_ns.enum("DeviceType")
 DEVICE_TYPES = {
     "tv": DeviceType.DEVICE_TYPE_TV,
@@ -75,6 +87,103 @@ OPCODES = {
     "play": 0x41,
 }
 
+# The complete CEC User Control Code table, shared by the key triggers and the
+# key_press action. Anything not listed can still be given as a raw hex byte.
+KEYS = {
+    "select": 0x00,
+    "up": 0x01,
+    "down": 0x02,
+    "left": 0x03,
+    "right": 0x04,
+    "right_up": 0x05,
+    "right_down": 0x06,
+    "left_up": 0x07,
+    "left_down": 0x08,
+    "root_menu": 0x09,
+    "setup_menu": 0x0A,
+    "contents_menu": 0x0B,
+    "favorite_menu": 0x0C,
+    "exit": 0x0D,
+    "media_top_menu": 0x10,
+    "media_context_menu": 0x11,
+    "number_entry_mode": 0x1D,
+    "number_11": 0x1E,
+    "number_12": 0x1F,
+    "number_0": 0x20,
+    "number_1": 0x21,
+    "number_2": 0x22,
+    "number_3": 0x23,
+    "number_4": 0x24,
+    "number_5": 0x25,
+    "number_6": 0x26,
+    "number_7": 0x27,
+    "number_8": 0x28,
+    "number_9": 0x29,
+    "dot": 0x2A,
+    "enter": 0x2B,
+    "clear": 0x2C,
+    "next_favorite": 0x2F,
+    "channel_up": 0x30,
+    "channel_down": 0x31,
+    "previous_channel": 0x32,
+    "sound_select": 0x33,
+    "input_select": 0x34,
+    "display_information": 0x35,
+    "help": 0x36,
+    "page_up": 0x37,
+    "page_down": 0x38,
+    "power": 0x40,
+    "volume_up": 0x41,
+    "volume_down": 0x42,
+    "mute": 0x43,
+    "play": 0x44,
+    "stop": 0x45,
+    "pause": 0x46,
+    "record": 0x47,
+    "rewind": 0x48,
+    "fast_forward": 0x49,
+    "eject": 0x4A,
+    "forward": 0x4B,
+    "backward": 0x4C,
+    "stop_record": 0x4D,
+    "pause_record": 0x4E,
+    "angle": 0x50,
+    "sub_picture": 0x51,
+    "video_on_demand": 0x52,
+    "electronic_program_guide": 0x53,
+    "timer_programming": 0x54,
+    "initial_configuration": 0x55,
+    "select_broadcast_type": 0x56,
+    "select_sound_presentation": 0x57,
+    "play_function": 0x60,
+    "pause_play_function": 0x61,
+    "record_function": 0x62,
+    "pause_record_function": 0x63,
+    "stop_function": 0x64,
+    "mute_function": 0x65,
+    "restore_volume_function": 0x66,
+    "tune_function": 0x67,
+    "select_media_function": 0x68,
+    "select_av_input_function": 0x69,
+    "select_audio_input_function": 0x6A,
+    "power_toggle_function": 0x6B,
+    "power_off_function": 0x6C,
+    "power_on_function": 0x6D,
+    "f1_blue": 0x71,
+    "f2_red": 0x72,
+    "f3_green": 0x73,
+    "f4_yellow": 0x74,
+    "f5": 0x75,
+    "data": 0x76,
+    # Convenience aliases.
+    "next": 0x4B,
+    "previous": 0x4C,
+    "back": 0x0D,
+}
+
+# hdmi_cec.volume action -> User Control Code.
+VOLUME_ACTIONS = {"up": 0x41, "down": 0x42, "mute": 0x43}
+
 CONF_DEVICE_TYPE = "device_type"
 CONF_PHYSICAL_ADDRESS = "physical_address"
 CONF_OSD_NAME = "osd_name"
@@ -91,6 +200,15 @@ CONF_FROM = "from"
 CONF_TO = "to"
 CONF_PARAMS = "params"
 CONF_RAW = "raw"
+CONF_ON_KEY_PRESS = "on_key_press"
+CONF_ON_KEY_RELEASE = "on_key_release"
+CONF_ON_STANDBY = "on_standby"
+CONF_ON_ACTIVE_SOURCE = "on_active_source"
+CONF_ON_VOLUME = "on_volume"
+CONF_ON_POWER = "on_power"
+CONF_DEVICE = "device"
+CONF_KEY = "key"
+CONF_ACTION = "action"
 
 # Sentinel matching PHYSICAL_ADDRESS_NONE in hdmi_cec.h: advertise nothing.
 PHYSICAL_ADDRESS_NONE = 0xFFFF
@@ -170,6 +288,17 @@ def _action_address(value):
     return _logical_address(value)
 
 
+def _key(value):
+    if isinstance(value, str):
+        k = value.strip().lower()
+        if k in KEYS:
+            return KEYS[k]
+    value = cv.hex_int(value)
+    if not 0 <= value <= 0xFF:
+        raise cv.Invalid("key must be a known name or a byte 0x00-0xFF")
+    return value
+
+
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(HdmiCec),
@@ -193,6 +322,24 @@ CONFIG_SCHEMA = cv.Schema(
                 cv.Optional(CONF_FROM): _filter_address,
                 cv.Optional(CONF_TO): _filter_address,
             }
+        ),
+        cv.Optional(CONF_ON_KEY_PRESS): automation.validate_automation(
+            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(KeyTrigger)}
+        ),
+        cv.Optional(CONF_ON_KEY_RELEASE): automation.validate_automation(
+            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(KeyTrigger)}
+        ),
+        cv.Optional(CONF_ON_STANDBY): automation.validate_automation(
+            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(StandbyTrigger)}
+        ),
+        cv.Optional(CONF_ON_ACTIVE_SOURCE): automation.validate_automation(
+            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(ActiveSourceTrigger)}
+        ),
+        cv.Optional(CONF_ON_VOLUME): automation.validate_automation(
+            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(VolumeTrigger)}
+        ),
+        cv.Optional(CONF_ON_POWER): automation.validate_automation(
+            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(PowerTrigger)}
         ),
     }
 ).extend(cv.COMPONENT_SCHEMA)
@@ -245,6 +392,30 @@ async def to_code(config):
         if CONF_TO in conf:
             cg.add(trigger.set_to(_resolve_filter(conf[CONF_TO], devices)))
         await automation.build_automation(trigger, [(Frame, "frame")], conf)
+
+    key_params = [(cg.std_string, "key"), (cg.uint8, "code"), (cg.uint8, "source")]
+    for conf in config.get(CONF_ON_KEY_PRESS, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var, False)
+        await automation.build_automation(trigger, key_params, conf)
+    for conf in config.get(CONF_ON_KEY_RELEASE, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var, True)
+        await automation.build_automation(trigger, key_params, conf)
+    for conf in config.get(CONF_ON_STANDBY, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+        await automation.build_automation(trigger, [(cg.uint8, "source")], conf)
+    for conf in config.get(CONF_ON_ACTIVE_SOURCE, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+        await automation.build_automation(
+            trigger, [(cg.uint16, "physical_address"), (cg.uint8, "source")], conf
+        )
+    for conf in config.get(CONF_ON_VOLUME, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+        await automation.build_automation(
+            trigger, [(cg.uint8, "volume"), (cg.bool_, "mute"), (cg.uint8, "source")], conf
+        )
+    for conf in config.get(CONF_ON_POWER, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+        await automation.build_automation(trigger, [(cg.bool_, "on"), (cg.uint8, "source")], conf)
 
 
 def _validate_transmit(config):
@@ -311,4 +482,94 @@ async def transmit_action_to_code(config, action_id, template_arg, args):
         if CONF_PARAMS in config:
             cg.add(var.set_params(await _templatable_bytes(config[CONF_PARAMS], args)))
             cg.add(var.set_has_params(True))
+    return var
+
+
+# ── Layer 3 semantic actions ─────────────────────────────────────────────────
+
+
+async def _apply_device(var, value, args):
+    if isinstance(value, str):  # "us", "broadcast", or a device-name token
+        cg.add(var.set_device_token(value))
+    else:
+        cg.add(var.set_device(await cg.templatable(value, args, cg.uint8)))
+        cg.add(var.set_has_device(True))
+
+
+POWER_ON_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(HdmiCec),
+        cv.Required(CONF_DEVICE): _action_address,
+    }
+)
+
+
+@automation.register_action("hdmi_cec.power_on", OpcodeAction, POWER_ON_SCHEMA)
+async def power_on_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent, 0x04)  # Image View On
+    await _apply_device(var, config[CONF_DEVICE], args)
+    return var
+
+
+STANDBY_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(HdmiCec),
+        cv.Optional(CONF_DEVICE): _action_address,
+    }
+)
+
+
+@automation.register_action("hdmi_cec.standby", OpcodeAction, STANDBY_SCHEMA)
+async def standby_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent, 0x36)  # Standby
+    if CONF_DEVICE in config:
+        await _apply_device(var, config[CONF_DEVICE], args)
+    return var
+
+
+KEY_PRESS_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(HdmiCec),
+        cv.Required(CONF_DEVICE): _action_address,
+        cv.Required(CONF_KEY): cv.templatable(_key),
+    }
+)
+
+
+@automation.register_action("hdmi_cec.key_press", KeyPressAction, KEY_PRESS_SCHEMA)
+async def key_press_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    await _apply_device(var, config[CONF_DEVICE], args)
+    cg.add(var.set_key(await cg.templatable(config[CONF_KEY], args, cg.uint8)))
+    return var
+
+
+VOLUME_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(HdmiCec),
+        cv.Required(CONF_DEVICE): _action_address,
+        cv.Required(CONF_ACTION): cv.enum(VOLUME_ACTIONS, lower=True),
+    }
+)
+
+
+@automation.register_action("hdmi_cec.volume", KeyPressAction, VOLUME_SCHEMA)
+async def volume_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    await _apply_device(var, config[CONF_DEVICE], args)
+    cg.add(var.set_key(config[CONF_ACTION]))  # already a User Control Code
+    return var
+
+
+ACTIVE_SOURCE_SCHEMA = cv.Schema({cv.GenerateID(): cv.use_id(HdmiCec)})
+
+
+@automation.register_action("hdmi_cec.active_source", ActiveSourceAction, ACTIVE_SOURCE_SCHEMA)
+async def active_source_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
     return var

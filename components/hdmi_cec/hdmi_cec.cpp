@@ -83,6 +83,103 @@ static uint8_t cec_device_type_code(DeviceType type) {
   return 4;
 }
 
+// The complete CEC User Control Code table. Unmapped codes come back as their
+// hex string so nothing is ever dropped.
+static std::string key_name(uint8_t code) {
+  switch (code) {
+    case 0x00: return "select";
+    case 0x01: return "up";
+    case 0x02: return "down";
+    case 0x03: return "left";
+    case 0x04: return "right";
+    case 0x05: return "right_up";
+    case 0x06: return "right_down";
+    case 0x07: return "left_up";
+    case 0x08: return "left_down";
+    case 0x09: return "root_menu";
+    case 0x0A: return "setup_menu";
+    case 0x0B: return "contents_menu";
+    case 0x0C: return "favorite_menu";
+    case 0x0D: return "exit";
+    case 0x10: return "media_top_menu";
+    case 0x11: return "media_context_menu";
+    case 0x1D: return "number_entry_mode";
+    case 0x1E: return "number_11";
+    case 0x1F: return "number_12";
+    case 0x20: return "number_0";
+    case 0x21: return "number_1";
+    case 0x22: return "number_2";
+    case 0x23: return "number_3";
+    case 0x24: return "number_4";
+    case 0x25: return "number_5";
+    case 0x26: return "number_6";
+    case 0x27: return "number_7";
+    case 0x28: return "number_8";
+    case 0x29: return "number_9";
+    case 0x2A: return "dot";
+    case 0x2B: return "enter";
+    case 0x2C: return "clear";
+    case 0x2F: return "next_favorite";
+    case 0x30: return "channel_up";
+    case 0x31: return "channel_down";
+    case 0x32: return "previous_channel";
+    case 0x33: return "sound_select";
+    case 0x34: return "input_select";
+    case 0x35: return "display_information";
+    case 0x36: return "help";
+    case 0x37: return "page_up";
+    case 0x38: return "page_down";
+    case 0x40: return "power";
+    case 0x41: return "volume_up";
+    case 0x42: return "volume_down";
+    case 0x43: return "mute";
+    case 0x44: return "play";
+    case 0x45: return "stop";
+    case 0x46: return "pause";
+    case 0x47: return "record";
+    case 0x48: return "rewind";
+    case 0x49: return "fast_forward";
+    case 0x4A: return "eject";
+    case 0x4B: return "forward";
+    case 0x4C: return "backward";
+    case 0x4D: return "stop_record";
+    case 0x4E: return "pause_record";
+    case 0x50: return "angle";
+    case 0x51: return "sub_picture";
+    case 0x52: return "video_on_demand";
+    case 0x53: return "electronic_program_guide";
+    case 0x54: return "timer_programming";
+    case 0x55: return "initial_configuration";
+    case 0x56: return "select_broadcast_type";
+    case 0x57: return "select_sound_presentation";
+    case 0x60: return "play_function";
+    case 0x61: return "pause_play_function";
+    case 0x62: return "record_function";
+    case 0x63: return "pause_record_function";
+    case 0x64: return "stop_function";
+    case 0x65: return "mute_function";
+    case 0x66: return "restore_volume_function";
+    case 0x67: return "tune_function";
+    case 0x68: return "select_media_function";
+    case 0x69: return "select_av_input_function";
+    case 0x6A: return "select_audio_input_function";
+    case 0x6B: return "power_toggle_function";
+    case 0x6C: return "power_off_function";
+    case 0x6D: return "power_on_function";
+    case 0x71: return "f1_blue";
+    case 0x72: return "f2_red";
+    case 0x73: return "f3_green";
+    case 0x74: return "f4_yellow";
+    case 0x75: return "f5";
+    case 0x76: return "data";
+    default: {
+      char buf[6];
+      snprintf(buf, sizeof(buf), "0x%02x", code);
+      return buf;
+    }
+  }
+}
+
 // RMT driver "receive done" callback — ISR context.
 static bool IRAM_ATTR rmt_rx_done_cb(rmt_channel_handle_t channel, const rmt_rx_done_event_data_t *edata,
                                      void *user_ctx) {
@@ -514,8 +611,9 @@ void HdmiCec::loop() {
         frame.params.assign(f.bytes + 2, f.bytes + f.len);
     }
 
-    // Registry snoops every frame on the bus, regardless of addressing.
+    // Registry and semantic triggers snoop every frame, regardless of addressing.
     this->update_registry_(frame);
+    this->process_semantic_(frame);
 
     // Legacy internal handler (set_frame_handler): sees every decoded frame,
     // with `data` being the payload after the header (including the opcode).
@@ -833,6 +931,55 @@ void HdmiCec::handle_housekeeping_(const Frame &frame) {
       break;
     default:  // directly addressed, unhandled, not a broadcast
       this->feature_abort_(initiator, frame.opcode);
+      break;
+  }
+}
+
+// ── Semantic (Layer 3) decode ────────────────────────────────────────────────
+// Turn the opcodes that carry high-level meaning into typed trigger events.
+// Observes every frame on the bus, like the registry.
+
+void HdmiCec::process_semantic_(const Frame &frame) {
+  switch (frame.opcode) {
+    case 0x44:  // User Control Pressed
+      if (!frame.params.empty()) {
+        uint8_t code = frame.params[0];
+        std::string name = key_name(code);
+        for (auto *t : this->key_press_triggers_)
+          t->trigger(name, code, frame.from);
+      }
+      break;
+    case 0x45:  // User Control Released (carries no operand)
+      for (auto *t : this->key_release_triggers_)
+        t->trigger(std::string(), (uint8_t) 0, frame.from);
+      break;
+    case 0x36:  // Standby
+      for (auto *t : this->standby_triggers_)
+        t->trigger(frame.from);
+      break;
+    case 0x82:  // Active Source — params are a physical address
+      if (frame.params.size() >= 2) {
+        uint16_t pa = (uint16_t) (frame.params[0] << 8) | frame.params[1];
+        for (auto *t : this->active_source_triggers_)
+          t->trigger(pa, frame.from);
+      }
+      break;
+    case 0x7A:  // Report Audio Status
+      if (!frame.params.empty()) {
+        uint8_t volume = frame.params[0] & 0x7F;
+        bool mute = (frame.params[0] & 0x80) != 0;
+        for (auto *t : this->volume_triggers_)
+          t->trigger(volume, mute, frame.from);
+      }
+      break;
+    case 0x90:  // Report Power Status
+      if (!frame.params.empty()) {
+        bool on = (frame.params[0] == 0x00 || frame.params[0] == 0x02);
+        for (auto *t : this->power_triggers_)
+          t->trigger(on, frame.from);
+      }
+      break;
+    default:
       break;
   }
 }

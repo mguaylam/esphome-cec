@@ -2,6 +2,7 @@
 
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
+#include "esphome/core/log.h"
 
 #include <driver/gptimer.h>
 #include <driver/rmt_rx.h>
@@ -92,6 +93,11 @@ struct Frame {
 };
 
 class HdmiCecFrameTrigger;
+class KeyTrigger;
+class StandbyTrigger;
+class ActiveSourceTrigger;
+class VolumeTrigger;
+class PowerTrigger;
 
 class HdmiCec : public Component {
  public:
@@ -141,6 +147,19 @@ class HdmiCec : public Component {
 
   // Register an `on_frame` trigger (called from generated code).
   void register_frame_trigger(HdmiCecFrameTrigger *trigger) { this->frame_triggers_.push_back(trigger); }
+
+  // Register the semantic (Layer 3) triggers (called from generated code).
+  void register_key_trigger(KeyTrigger *trigger, bool release) {
+    (release ? this->key_release_triggers_ : this->key_press_triggers_).push_back(trigger);
+  }
+  void register_standby_trigger(StandbyTrigger *trigger) { this->standby_triggers_.push_back(trigger); }
+  void register_active_source_trigger(ActiveSourceTrigger *trigger) { this->active_source_triggers_.push_back(trigger); }
+  void register_volume_trigger(VolumeTrigger *trigger) { this->volume_triggers_.push_back(trigger); }
+  void register_power_trigger(PowerTrigger *trigger) { this->power_triggers_.push_back(trigger); }
+
+  // The configured physical address, or PHYSICAL_ADDRESS_NONE. Used by the
+  // active_source action.
+  uint16_t physical_address() const { return this->physical_address_; }
   // Resolve a config address token — "us" (our negotiated address), "broadcast",
   // or a named device — to a logical address. Returns 0xF for an unknown token.
   uint8_t resolve_address(const std::string &token) const;
@@ -191,6 +210,9 @@ class HdmiCec : public Component {
   void update_registry_(const Frame &frame);
   void poll_registry_();
 
+  // Decode one frame into the semantic (Layer 3) triggers.
+  void process_semantic_(const Frame &frame);
+
   // auto_respond housekeeping: answer standard queries directed at us, and
   // Feature Abort anything else directly addressed and unhandled.
   void handle_housekeeping_(const Frame &frame);
@@ -240,6 +262,12 @@ class HdmiCec : public Component {
   QueueHandle_t frame_queue_{nullptr};
   std::function<void(uint8_t, uint8_t, const std::vector<uint8_t> &)> frame_handler_{};
   std::vector<HdmiCecFrameTrigger *> frame_triggers_;
+  std::vector<KeyTrigger *> key_press_triggers_;
+  std::vector<KeyTrigger *> key_release_triggers_;
+  std::vector<StandbyTrigger *> standby_triggers_;
+  std::vector<ActiveSourceTrigger *> active_source_triggers_;
+  std::vector<VolumeTrigger *> volume_triggers_;
+  std::vector<PowerTrigger *> power_triggers_;
 
   // ── Device-state registry ──
   DeviceState states_[16];                                 // indexed by logical address
@@ -380,6 +408,98 @@ template<typename... Ts> class TransmitAction : public Action<Ts...> {
   bool has_opcode_{false};
   bool has_params_{false};
   bool has_raw_{false};
+};
+
+// ── Semantic (Layer 3) triggers ──────────────────────────────────────────────
+// One class is shared by on_key_press and on_key_release; the constructor flag
+// routes it into the right list.
+class KeyTrigger : public Trigger<std::string, uint8_t, uint8_t> {
+ public:
+  KeyTrigger(HdmiCec *parent, bool release) { parent->register_key_trigger(this, release); }
+};
+class StandbyTrigger : public Trigger<uint8_t> {
+ public:
+  explicit StandbyTrigger(HdmiCec *parent) { parent->register_standby_trigger(this); }
+};
+class ActiveSourceTrigger : public Trigger<uint16_t, uint8_t> {
+ public:
+  explicit ActiveSourceTrigger(HdmiCec *parent) { parent->register_active_source_trigger(this); }
+};
+class VolumeTrigger : public Trigger<uint8_t, bool, uint8_t> {
+ public:
+  explicit VolumeTrigger(HdmiCec *parent) { parent->register_volume_trigger(this); }
+};
+class PowerTrigger : public Trigger<bool, uint8_t> {
+ public:
+  explicit PowerTrigger(HdmiCec *parent) { parent->register_power_trigger(this); }
+};
+
+// ── Semantic (Layer 3) actions ───────────────────────────────────────────────
+// Resolves a device destination the same way TransmitAction does: a name/keyword
+// token, a templatable value, or (when neither is set) the broadcast address.
+template<typename... Ts> class SemanticActionBase : public Action<Ts...> {
+ public:
+  explicit SemanticActionBase(HdmiCec *parent) : parent_(parent) {}
+  TEMPLATABLE_VALUE(uint8_t, device)
+  void set_device_token(const std::string &token) {
+    this->device_token_ = token;
+    this->has_device_token_ = true;
+  }
+  void set_has_device(bool value) { this->has_device_value_ = value; }
+
+ protected:
+  uint8_t resolve_device_(Ts... x) {
+    if (this->has_device_token_)
+      return this->parent_->resolve_address(this->device_token_);
+    if (this->has_device_value_)
+      return this->device_.value(x...);
+    return 0x0F;  // broadcast
+  }
+  HdmiCec *parent_;
+  std::string device_token_;
+  bool has_device_token_{false};
+  bool has_device_value_{false};
+};
+
+// power_on (Image View On) and standby (Standby): a fixed opcode to a device.
+template<typename... Ts> class OpcodeAction : public SemanticActionBase<Ts...> {
+ public:
+  OpcodeAction(HdmiCec *parent, uint8_t opcode) : SemanticActionBase<Ts...>(parent), opcode_(opcode) {}
+  void play(Ts... x) override { this->parent_->send(this->resolve_device_(x...), {this->opcode_}); }
+
+ protected:
+  uint8_t opcode_;
+};
+
+// key_press and volume: User Control Pressed(code) then Released to a device.
+template<typename... Ts> class KeyPressAction : public SemanticActionBase<Ts...> {
+ public:
+  explicit KeyPressAction(HdmiCec *parent) : SemanticActionBase<Ts...>(parent) {}
+  TEMPLATABLE_VALUE(uint8_t, key)
+  void play(Ts... x) override {
+    uint8_t dest = this->resolve_device_(x...);
+    uint8_t code = this->key_.value(x...);
+    this->parent_->send(dest, {0x44, code});  // User Control Pressed
+    this->parent_->send(dest, {0x45});        // User Control Released
+  }
+};
+
+// active_source: broadcast Active Source with our configured physical address.
+template<typename... Ts> class ActiveSourceAction : public Action<Ts...> {
+ public:
+  explicit ActiveSourceAction(HdmiCec *parent) : parent_(parent) {}
+  void play(Ts... x) override {
+    uint16_t pa = this->parent_->physical_address();
+    if (pa == PHYSICAL_ADDRESS_NONE) {
+      ESP_LOGW("hdmi_cec", "active_source: no physical_address configured, nothing to announce");
+      return;
+    }
+    this->parent_->send_from(this->parent_->address(), 0x0F,
+                             {0x82, (uint8_t) (pa >> 8), (uint8_t) (pa & 0xFF)});
+  }
+
+ protected:
+  HdmiCec *parent_;
 };
 
 }  // namespace hdmi_cec
