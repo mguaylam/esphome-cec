@@ -191,6 +191,11 @@ class HdmiCec : public Component {
   void update_registry_(const Frame &frame);
   void poll_registry_();
 
+  // auto_respond housekeeping: answer standard queries directed at us, and
+  // Feature Abort anything else directly addressed and unhandled.
+  void handle_housekeeping_(const Frame &frame);
+  void feature_abort_(uint8_t initiator, uint8_t opcode);
+
   // Logical-address negotiation: probe the device type's pool and claim the
   // first free address. Falls back to unregistered (listen-only) if the whole
   // pool is taken or TX is unavailable.

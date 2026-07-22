@@ -63,6 +63,26 @@ static const char *device_type_name(DeviceType type) {
   return "?";
 }
 
+// The CEC "Device Type" operand used in Report Physical Address. Note it is not
+// the same numbering as our DeviceType enum (the CEC table reserves value 2).
+static uint8_t cec_device_type_code(DeviceType type) {
+  switch (type) {
+    case DEVICE_TYPE_TV:
+      return 0;
+    case DEVICE_TYPE_RECORDER:
+      return 1;
+    case DEVICE_TYPE_TUNER:
+      return 3;
+    case DEVICE_TYPE_PLAYBACK:
+      return 4;
+    case DEVICE_TYPE_AUDIO_SYSTEM:
+      return 5;
+    case DEVICE_TYPE_SWITCH:
+      return 6;
+  }
+  return 4;
+}
+
 // RMT driver "receive done" callback — ISR context.
 static bool IRAM_ATTR rmt_rx_done_cb(rmt_channel_handle_t channel, const rmt_rx_done_event_data_t *edata,
                                      void *user_ctx) {
@@ -509,6 +529,9 @@ void HdmiCec::loop() {
       for (auto *trigger : this->frame_triggers_)
         trigger->process(frame);
     }
+
+    // Answer standard queries on our own, if enabled.
+    this->handle_housekeeping_(frame);
   }
 
   this->poll_registry_();
@@ -751,6 +774,66 @@ void HdmiCec::poll_registry_() {
     this->poll_sent_ms_ = now;
     this->poll_wait_addr_ = target.first;
     this->poll_wait_opcode_ = (target.second == 0x8F) ? 0x90 : 0x7A;  // expected reply
+  }
+}
+
+// ── auto_respond housekeeping ────────────────────────────────────────────────
+// Answer the standard queries every device is expected to handle, so the user
+// never wires them by hand. Only for frames directly addressed to us (never a
+// broadcast), never in monitor mode, never our own self-captures. Anything else
+// directly addressed and unhandled gets a Feature Abort — the compliant middle
+// ground between silence and flooding the bus.
+
+void HdmiCec::feature_abort_(uint8_t initiator, uint8_t opcode) {
+  // [Feature Abort][original opcode][reason: 0x00 = Unrecognized opcode].
+  this->send(initiator, {0x00, opcode, 0x00});
+}
+
+void HdmiCec::handle_housekeeping_(const Frame &frame) {
+  if (!this->auto_respond_ || this->monitor_mode_)
+    return;
+  if (frame.from == this->address_)
+    return;  // our own transmission, seen via the self-capture
+  if (frame.to != this->address_)
+    return;  // only directly addressed — never broadcasts or other devices
+  if (frame.data.empty())
+    return;  // header-only polling message: the receiver ACK is the whole answer
+
+  uint8_t initiator = frame.from;
+  switch (frame.opcode) {
+    case 0x46: {  // Give OSD Name → Set OSD Name
+      std::vector<uint8_t> payload = {0x47};
+      payload.insert(payload.end(), this->osd_name_.begin(), this->osd_name_.end());
+      this->send(initiator, payload);
+      break;
+    }
+    case 0x8F:  // Give Device Power Status → Report Power Status (always on)
+      this->send(initiator, {0x90, 0x00});
+      break;
+    case 0x9F:  // Get CEC Version → CEC Version (0x05 = 1.4)
+      this->send(initiator, {0x9E, 0x05});
+      break;
+    case 0x83:  // Give Physical Address → Report Physical Address (broadcast)
+      if (this->physical_address_ != PHYSICAL_ADDRESS_NONE) {
+        uint8_t hi = (this->physical_address_ >> 8) & 0xFF;
+        uint8_t lo = this->physical_address_ & 0xFF;
+        this->send_from(this->address_, 0x0F, {0x84, hi, lo, cec_device_type_code(this->device_type_)});
+      } else {
+        this->feature_abort_(initiator, frame.opcode);
+      }
+      break;
+    case 0x8C:  // Give Device Vendor ID → Device Vendor ID (broadcast)
+      if (this->vendor_id_ != 0) {
+        this->send_from(this->address_, 0x0F,
+                        {0x87, (uint8_t) (this->vendor_id_ >> 16), (uint8_t) (this->vendor_id_ >> 8),
+                         (uint8_t) (this->vendor_id_)});
+      } else {
+        this->feature_abort_(initiator, frame.opcode);
+      }
+      break;
+    default:  // directly addressed, unhandled, not a broadcast
+      this->feature_abort_(initiator, frame.opcode);
+      break;
   }
 }
 
