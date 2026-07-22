@@ -135,3 +135,29 @@ button:
     name: "Announce active source"
     on_press:
       - hdmi_cec.active_source: {}
+
+sensor:
+  - platform: hdmi_cec
+    name: "AVR volume"
+    device: avr
+    type: audio_volume
+
+binary_sensor:
+  - platform: hdmi_cec
+    name: "AVR muted"
+    device: avr
+    type: mute
+  - platform: hdmi_cec
+    name: "TV power"
+    device: tv
+    type: power
+
+text_sensor:
+  - platform: hdmi_cec
+    name: "TV name"
+    device: tv
+    type: osd_name
+  - platform: hdmi_cec
+    name: "AVR power state"
+    device: avr
+    type: power_state

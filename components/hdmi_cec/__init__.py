@@ -299,6 +299,39 @@ def _key(value):
     return value
 
 
+# ── Shared by the entity platforms (Layer 4) ─────────────────────────────────
+CONF_HDMI_CEC_ID = "hdmi_cec_id"
+
+
+def entity_device(value):
+    # A literal logical address, or a device name resolved against the hub's
+    # `devices:` map at runtime.
+    if isinstance(value, str):
+        try:
+            return _logical_address(value)
+        except cv.Invalid:
+            return cv.valid_name(value)
+    return _logical_address(value)
+
+
+ENTITY_BASE_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(CONF_HDMI_CEC_ID): cv.use_id(HdmiCec),
+        cv.Required(CONF_DEVICE): entity_device,
+    }
+)
+
+
+async def register_entity_device(var, config):
+    parent = await cg.get_variable(config[CONF_HDMI_CEC_ID])
+    cg.add(var.set_parent(parent))
+    device = config[CONF_DEVICE]
+    if isinstance(device, int):
+        cg.add(var.set_address(device))
+    else:
+        cg.add(var.set_device_name(device))
+
+
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(HdmiCec),
