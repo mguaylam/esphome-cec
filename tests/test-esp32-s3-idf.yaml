@@ -53,6 +53,34 @@ hdmi_cec:
     # No filter: every frame the promiscuous bus delivers.
     - then:
         - logger.log: "saw a frame"
+  on_key_press:
+    - then:
+        - logger.log:
+            format: "key %s (0x%02X) from %u"
+            args: ["key.c_str()", "code", "source"]
+  on_key_release:
+    - then:
+        - logger.log: "key released"
+  on_standby:
+    - then:
+        - logger.log:
+            format: "standby from %u"
+            args: ["source"]
+  on_active_source:
+    - then:
+        - logger.log:
+            format: "active source %04X from %u"
+            args: ["physical_address", "source"]
+  on_volume:
+    - then:
+        - logger.log:
+            format: "volume=%u mute=%d from %u"
+            args: ["volume", "mute", "source"]
+  on_power:
+    - then:
+        - logger.log:
+            format: "power on=%d from %u"
+            args: ["on", "source"]
 
 button:
   # Structured transmit: named opcode + params, device-name destination.
@@ -80,3 +108,30 @@ button:
       - hdmi_cec.transmit:
           to: !lambda "return 0x0;"
           raw: [0x8F]
+
+  # Semantic actions (Layer 3).
+  - platform: template
+    name: "TV on"
+    on_press:
+      - hdmi_cec.power_on:
+          device: tv
+  - platform: template
+    name: "All standby"
+    on_press:
+      - hdmi_cec.standby: {}
+  - platform: template
+    name: "AVR volume up"
+    on_press:
+      - hdmi_cec.volume:
+          device: avr
+          action: up
+  - platform: template
+    name: "AVR mute key"
+    on_press:
+      - hdmi_cec.key_press:
+          device: avr
+          key: mute
+  - platform: template
+    name: "Announce active source"
+    on_press:
+      - hdmi_cec.active_source: {}
