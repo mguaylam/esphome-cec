@@ -149,6 +149,13 @@ void HdmiCec::setup() {
   ESP_LOGI(TAG, "CEC on GPIO%u, address %u (RX %s, TX %s, ACK %s)", (unsigned) this->pin_, (unsigned) this->address_,
            this->last_arm_err_ == ESP_OK ? "armed" : "FAILED", this->tx_channel_ != nullptr ? "ready" : "MISSING",
            this->ack_timer_ != nullptr ? "active" : "MISSING");
+
+  // Build the active-poll target list from the tracked devices.
+  for (const auto &d : this->devices_) {
+    this->poll_targets_.push_back({d.address, 0x8F});     // Give Device Power Status
+    if (d.address == 0x05)                                // audio system
+      this->poll_targets_.push_back({d.address, 0x71});  // Give Audio Status
+  }
 }
 
 // ── Logical-address negotiation ─────────────────────────────────────────────
@@ -487,6 +494,9 @@ void HdmiCec::loop() {
         frame.params.assign(f.bytes + 2, f.bytes + f.len);
     }
 
+    // Registry snoops every frame on the bus, regardless of addressing.
+    this->update_registry_(frame);
+
     // Legacy internal handler (set_frame_handler): sees every decoded frame,
     // with `data` being the payload after the header (including the opcode).
     if (this->frame_handler_)
@@ -500,6 +510,8 @@ void HdmiCec::loop() {
         trigger->process(frame);
     }
   }
+
+  this->poll_registry_();
 }
 
 void HdmiCec::rx_task_trampoline(void *arg) { static_cast<HdmiCec *>(arg)->rx_task_(); }
@@ -625,9 +637,16 @@ void HdmiCec::dump_config() {
                 this->auto_respond_ ? "yes" : "no", this->promiscuous_mode_ ? "yes" : "no",
                 (unsigned) this->retransmit_, (unsigned) (this->update_interval_ / 1000));
   if (!this->devices_.empty()) {
-    ESP_LOGCONFIG(TAG, "  Named devices:");
-    for (const auto &d : this->devices_)
-      ESP_LOGCONFIG(TAG, "    %s -> 0x%X", d.name.c_str(), (unsigned) d.address);
+    ESP_LOGCONFIG(TAG, "  Tracked devices:");
+    for (const auto &d : this->devices_) {
+      const DeviceState &s = this->states_[d.address & 0x0F];
+      const char *power = s.power == POWER_ON ? "on" : (s.power == POWER_STANDBY ? "standby" : "unknown");
+      if (s.volume_known)
+        ESP_LOGCONFIG(TAG, "    %s (0x%X): power=%s volume=%u mute=%d", d.name.c_str(), (unsigned) d.address, power,
+                      (unsigned) s.volume, s.mute);
+      else
+        ESP_LOGCONFIG(TAG, "    %s (0x%X): power=%s", d.name.c_str(), (unsigned) d.address, power);
+    }
   }
   ESP_LOGCONFIG(TAG, "  RX channel: %s, DMA: %s, last arm: %s (%d)",
                 this->rx_channel_ != nullptr ? "created" : "MISSING", this->dma_used_ ? "yes" : "no",
@@ -656,6 +675,83 @@ uint8_t HdmiCec::resolve_address(const std::string &token) const {
     return named;
   ESP_LOGW(TAG, "Unknown address '%s', falling back to broadcast", token.c_str());
   return 0x0F;
+}
+
+// ── Device-state registry ───────────────────────────────────────────────────
+// Passively keep each device's state current by decoding the reports that cross
+// the bus. The registry snoops everything, even frames not addressed to us.
+
+void HdmiCec::update_registry_(const Frame &frame) {
+  DeviceState &st = this->states_[frame.from & 0x0F];
+  switch (frame.opcode) {
+    case 0x90:  // Report Power Status
+      if (!frame.params.empty()) {
+        // 0x00 = on, 0x01 = standby, 0x02 = transitioning to on, 0x03 = to standby.
+        PowerState p = (frame.params[0] == 0x00 || frame.params[0] == 0x02) ? POWER_ON : POWER_STANDBY;
+        if (st.power != p) {
+          st.power = p;
+          ESP_LOGD(TAG, "device 0x%X power=%s", (unsigned) frame.from, p == POWER_ON ? "on" : "standby");
+        }
+      }
+      if (this->poll_in_flight_ && this->poll_wait_opcode_ == 0x90 && frame.from == this->poll_wait_addr_)
+        this->poll_in_flight_ = false;
+      break;
+    case 0x7A:  // Report Audio Status
+      if (!frame.params.empty()) {
+        st.mute = (frame.params[0] & 0x80) != 0;
+        st.volume = frame.params[0] & 0x7F;
+        st.volume_known = true;
+        ESP_LOGD(TAG, "device 0x%X volume=%u mute=%d", (unsigned) frame.from, (unsigned) st.volume, st.mute);
+      }
+      if (this->poll_in_flight_ && this->poll_wait_opcode_ == 0x7A && frame.from == this->poll_wait_addr_)
+        this->poll_in_flight_ = false;
+      break;
+    case 0x82:  // Active Source (broadcast) — params are a physical address
+      if (frame.params.size() >= 2) {
+        st.active_source = (uint16_t) (frame.params[0] << 8) | frame.params[1];
+        ESP_LOGD(TAG, "device 0x%X active source=%04X", (unsigned) frame.from, (unsigned) st.active_source);
+      }
+      break;
+    case 0x47:  // Set OSD Name
+      if (!frame.params.empty()) {
+        st.osd_name.assign(frame.params.begin(), frame.params.end());
+        ESP_LOGD(TAG, "device 0x%X osd_name='%s'", (unsigned) frame.from, st.osd_name.c_str());
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+// One rate-limited poll step per call: a safety net over the passive updates,
+// never a flood. Round-robin over the tracked devices, one query in flight at a
+// time, and never while the bus was busy in the last 200 ms.
+void HdmiCec::poll_registry_() {
+  if (this->poll_targets_.empty() || this->monitor_mode_ || this->tx_channel_ == nullptr)
+    return;
+
+  uint32_t now = millis();
+  if (this->poll_in_flight_) {
+    if (now - this->poll_sent_ms_ >= 1000)
+      this->poll_in_flight_ = false;  // reply timed out
+    else
+      return;
+  }
+  if (now - this->last_poll_ms_ < this->update_interval_)
+    return;
+  if (now - this->last_rx_ms_ < 200)
+    return;  // bus busy: back off
+
+  const std::pair<uint8_t, uint8_t> &target = this->poll_targets_[this->poll_index_ % this->poll_targets_.size()];
+  this->poll_index_++;
+  this->last_poll_ms_ = now;
+
+  if (this->send(target.first, {target.second})) {
+    this->poll_in_flight_ = true;
+    this->poll_sent_ms_ = now;
+    this->poll_wait_addr_ = target.first;
+    this->poll_wait_opcode_ = (target.second == 0x8F) ? 0x90 : 0x7A;  // expected reply
+  }
 }
 
 }  // namespace hdmi_cec

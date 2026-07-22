@@ -1,5 +1,6 @@
 # Compile test for the hdmi_cec component.
 # Layer 0 (hub) + Layer 1 (named devices) + Layer 2 (on_frame / transmit).
+# The named devices below are also tracked by the device-state registry.
 # Exercises the full configuration surface with no magic opcodes.
 esphome:
   name: hdmi-cec-test
