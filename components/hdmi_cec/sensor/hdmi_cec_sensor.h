@@ -1,12 +1,11 @@
 #pragma once
 
-#include "esphome/components/sensor/sensor.h"
-#include "esphome/core/component.h"
-#include "esphome/core/log.h"
-
 #include <string>
 
 #include "../hdmi_cec.h"
+#include "esphome/components/sensor/sensor.h"
+#include "esphome/core/component.h"
+#include "esphome/core/log.h"
 
 namespace esphome {
 namespace hdmi_cec {
@@ -29,13 +28,10 @@ class HdmiCecSensor : public sensor::Sensor, public PollingComponent {
   }
 
   void update() override {
-    if (this->address_ == 0xFF)
-      return;
+    if (this->address_ == 0xFF) return;
     uint8_t volume = this->parent_->volume_of(this->address_);
-    if (volume == 0xFF)
-      return;  // unknown
-    if (!this->has_state() || this->state != volume)
-      this->publish_state(volume);
+    if (volume == 0xFF) return;  // unknown
+    if (!this->has_state() || this->state != volume) this->publish_state(volume);
   }
 
  protected:

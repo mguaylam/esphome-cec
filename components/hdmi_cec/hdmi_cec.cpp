@@ -1,8 +1,5 @@
 #include "hdmi_cec.h"
 
-#include "esphome/core/hal.h"
-#include "esphome/core/log.h"
-
 #include <driver/gpio.h>
 #include <esp_rom_gpio.h>
 #include <esp_timer.h>
@@ -11,6 +8,9 @@
 #include <soc/gpio_struct.h>
 
 #include <cstring>
+
+#include "esphome/core/hal.h"
+#include "esphome/core/log.h"
 
 namespace esphome {
 namespace hdmi_cec {
@@ -87,91 +87,176 @@ static uint8_t cec_device_type_code(DeviceType type) {
 // hex string so nothing is ever dropped.
 static std::string key_name(uint8_t code) {
   switch (code) {
-    case 0x00: return "select";
-    case 0x01: return "up";
-    case 0x02: return "down";
-    case 0x03: return "left";
-    case 0x04: return "right";
-    case 0x05: return "right_up";
-    case 0x06: return "right_down";
-    case 0x07: return "left_up";
-    case 0x08: return "left_down";
-    case 0x09: return "root_menu";
-    case 0x0A: return "setup_menu";
-    case 0x0B: return "contents_menu";
-    case 0x0C: return "favorite_menu";
-    case 0x0D: return "exit";
-    case 0x10: return "media_top_menu";
-    case 0x11: return "media_context_menu";
-    case 0x1D: return "number_entry_mode";
-    case 0x1E: return "number_11";
-    case 0x1F: return "number_12";
-    case 0x20: return "number_0";
-    case 0x21: return "number_1";
-    case 0x22: return "number_2";
-    case 0x23: return "number_3";
-    case 0x24: return "number_4";
-    case 0x25: return "number_5";
-    case 0x26: return "number_6";
-    case 0x27: return "number_7";
-    case 0x28: return "number_8";
-    case 0x29: return "number_9";
-    case 0x2A: return "dot";
-    case 0x2B: return "enter";
-    case 0x2C: return "clear";
-    case 0x2F: return "next_favorite";
-    case 0x30: return "channel_up";
-    case 0x31: return "channel_down";
-    case 0x32: return "previous_channel";
-    case 0x33: return "sound_select";
-    case 0x34: return "input_select";
-    case 0x35: return "display_information";
-    case 0x36: return "help";
-    case 0x37: return "page_up";
-    case 0x38: return "page_down";
-    case 0x40: return "power";
-    case 0x41: return "volume_up";
-    case 0x42: return "volume_down";
-    case 0x43: return "mute";
-    case 0x44: return "play";
-    case 0x45: return "stop";
-    case 0x46: return "pause";
-    case 0x47: return "record";
-    case 0x48: return "rewind";
-    case 0x49: return "fast_forward";
-    case 0x4A: return "eject";
-    case 0x4B: return "forward";
-    case 0x4C: return "backward";
-    case 0x4D: return "stop_record";
-    case 0x4E: return "pause_record";
-    case 0x50: return "angle";
-    case 0x51: return "sub_picture";
-    case 0x52: return "video_on_demand";
-    case 0x53: return "electronic_program_guide";
-    case 0x54: return "timer_programming";
-    case 0x55: return "initial_configuration";
-    case 0x56: return "select_broadcast_type";
-    case 0x57: return "select_sound_presentation";
-    case 0x60: return "play_function";
-    case 0x61: return "pause_play_function";
-    case 0x62: return "record_function";
-    case 0x63: return "pause_record_function";
-    case 0x64: return "stop_function";
-    case 0x65: return "mute_function";
-    case 0x66: return "restore_volume_function";
-    case 0x67: return "tune_function";
-    case 0x68: return "select_media_function";
-    case 0x69: return "select_av_input_function";
-    case 0x6A: return "select_audio_input_function";
-    case 0x6B: return "power_toggle_function";
-    case 0x6C: return "power_off_function";
-    case 0x6D: return "power_on_function";
-    case 0x71: return "f1_blue";
-    case 0x72: return "f2_red";
-    case 0x73: return "f3_green";
-    case 0x74: return "f4_yellow";
-    case 0x75: return "f5";
-    case 0x76: return "data";
+    case 0x00:
+      return "select";
+    case 0x01:
+      return "up";
+    case 0x02:
+      return "down";
+    case 0x03:
+      return "left";
+    case 0x04:
+      return "right";
+    case 0x05:
+      return "right_up";
+    case 0x06:
+      return "right_down";
+    case 0x07:
+      return "left_up";
+    case 0x08:
+      return "left_down";
+    case 0x09:
+      return "root_menu";
+    case 0x0A:
+      return "setup_menu";
+    case 0x0B:
+      return "contents_menu";
+    case 0x0C:
+      return "favorite_menu";
+    case 0x0D:
+      return "exit";
+    case 0x10:
+      return "media_top_menu";
+    case 0x11:
+      return "media_context_menu";
+    case 0x1D:
+      return "number_entry_mode";
+    case 0x1E:
+      return "number_11";
+    case 0x1F:
+      return "number_12";
+    case 0x20:
+      return "number_0";
+    case 0x21:
+      return "number_1";
+    case 0x22:
+      return "number_2";
+    case 0x23:
+      return "number_3";
+    case 0x24:
+      return "number_4";
+    case 0x25:
+      return "number_5";
+    case 0x26:
+      return "number_6";
+    case 0x27:
+      return "number_7";
+    case 0x28:
+      return "number_8";
+    case 0x29:
+      return "number_9";
+    case 0x2A:
+      return "dot";
+    case 0x2B:
+      return "enter";
+    case 0x2C:
+      return "clear";
+    case 0x2F:
+      return "next_favorite";
+    case 0x30:
+      return "channel_up";
+    case 0x31:
+      return "channel_down";
+    case 0x32:
+      return "previous_channel";
+    case 0x33:
+      return "sound_select";
+    case 0x34:
+      return "input_select";
+    case 0x35:
+      return "display_information";
+    case 0x36:
+      return "help";
+    case 0x37:
+      return "page_up";
+    case 0x38:
+      return "page_down";
+    case 0x40:
+      return "power";
+    case 0x41:
+      return "volume_up";
+    case 0x42:
+      return "volume_down";
+    case 0x43:
+      return "mute";
+    case 0x44:
+      return "play";
+    case 0x45:
+      return "stop";
+    case 0x46:
+      return "pause";
+    case 0x47:
+      return "record";
+    case 0x48:
+      return "rewind";
+    case 0x49:
+      return "fast_forward";
+    case 0x4A:
+      return "eject";
+    case 0x4B:
+      return "forward";
+    case 0x4C:
+      return "backward";
+    case 0x4D:
+      return "stop_record";
+    case 0x4E:
+      return "pause_record";
+    case 0x50:
+      return "angle";
+    case 0x51:
+      return "sub_picture";
+    case 0x52:
+      return "video_on_demand";
+    case 0x53:
+      return "electronic_program_guide";
+    case 0x54:
+      return "timer_programming";
+    case 0x55:
+      return "initial_configuration";
+    case 0x56:
+      return "select_broadcast_type";
+    case 0x57:
+      return "select_sound_presentation";
+    case 0x60:
+      return "play_function";
+    case 0x61:
+      return "pause_play_function";
+    case 0x62:
+      return "record_function";
+    case 0x63:
+      return "pause_record_function";
+    case 0x64:
+      return "stop_function";
+    case 0x65:
+      return "mute_function";
+    case 0x66:
+      return "restore_volume_function";
+    case 0x67:
+      return "tune_function";
+    case 0x68:
+      return "select_media_function";
+    case 0x69:
+      return "select_av_input_function";
+    case 0x6A:
+      return "select_audio_input_function";
+    case 0x6B:
+      return "power_toggle_function";
+    case 0x6C:
+      return "power_off_function";
+    case 0x6D:
+      return "power_on_function";
+    case 0x71:
+      return "f1_blue";
+    case 0x72:
+      return "f2_red";
+    case 0x73:
+      return "f3_green";
+    case 0x74:
+      return "f4_yellow";
+    case 0x75:
+      return "f5";
+    case 0x76:
+      return "data";
     default: {
       char buf[6];
       snprintf(buf, sizeof(buf), "0x%02x", code);
@@ -225,13 +310,13 @@ void HdmiCec::setup() {
   this->dma_used_ = (err == ESP_OK);
   if (err != ESP_OK) {
     // Some chips or allocation states refuse DMA: retry without it.
-    ESP_LOGW(TAG, "RMT DMA channel refused (%d), retrying without DMA", (int) err);
+    ESP_LOGW(TAG, "RMT DMA channel refused (%d), retrying without DMA", (int)err);
     cfg.flags.with_dma = false;
     cfg.mem_block_symbols = 64;
     err = rmt_new_rx_channel(&cfg, &this->rx_channel_);
   }
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "rmt_new_rx_channel failed: %d", (int) err);
+    ESP_LOGE(TAG, "rmt_new_rx_channel failed: %d", (int)err);
     this->mark_failed();
     return;
   }
@@ -239,10 +324,9 @@ void HdmiCec::setup() {
   rmt_rx_event_callbacks_t cbs = {};
   cbs.on_recv_done = rmt_rx_done_cb;
   err = rmt_rx_register_event_callbacks(this->rx_channel_, &cbs, this);
-  if (err == ESP_OK)
-    err = rmt_enable(this->rx_channel_);
+  if (err == ESP_OK) err = rmt_enable(this->rx_channel_);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Could not enable the RMT channel: %d", (int) err);
+    ESP_LOGE(TAG, "Could not enable the RMT channel: %d", (int)err);
     this->mark_failed();
     return;
   }
@@ -258,19 +342,19 @@ void HdmiCec::setup() {
     ESP_LOGI(TAG, "Monitor mode: listen-only (address 0xF), never driving the bus");
   } else if (this->address_override_ != ADDRESS_AUTO) {
     this->address_ = this->address_override_;
-    ESP_LOGI(TAG, "Using configured logical address %u (no negotiation)", (unsigned) this->address_);
+    ESP_LOGI(TAG, "Using configured logical address %u (no negotiation)", (unsigned)this->address_);
   } else {
     this->negotiate_address_();
   }
 
-  ESP_LOGI(TAG, "CEC on GPIO%u, address %u (RX %s, TX %s, ACK %s)", (unsigned) this->pin_, (unsigned) this->address_,
+  ESP_LOGI(TAG, "CEC on GPIO%u, address %u (RX %s, TX %s, ACK %s)", (unsigned)this->pin_, (unsigned)this->address_,
            this->last_arm_err_ == ESP_OK ? "armed" : "FAILED", this->tx_channel_ != nullptr ? "ready" : "MISSING",
            this->ack_timer_ != nullptr ? "active" : "MISSING");
 
   // Build the active-poll target list from the tracked devices.
   for (const auto &d : this->devices_) {
-    this->poll_targets_.push_back({d.address, 0x8F});     // Give Device Power Status
-    if (d.address == 0x05)                                // audio system
+    this->poll_targets_.push_back({d.address, 0x8F});    // Give Device Power Status
+    if (d.address == 0x05)                               // audio system
       this->poll_targets_.push_back({d.address, 0x71});  // Give Audio Status
   }
 }
@@ -292,7 +376,7 @@ void HdmiCec::negotiate_address_() {
   if (this->tx_channel_ == nullptr) {
     this->address_ = pool.addrs[0];
     ESP_LOGW(TAG, "TX unavailable: cannot probe, defaulting to address %u without claiming it",
-             (unsigned) this->address_);
+             (unsigned)this->address_);
     return;
   }
 
@@ -301,15 +385,14 @@ void HdmiCec::negotiate_address_() {
     if (!this->poll_address_(candidate)) {
       this->address_ = candidate;
       this->negotiated_ = true;
-      ESP_LOGI(TAG, "Claimed logical address %u", (unsigned) candidate);
+      ESP_LOGI(TAG, "Claimed logical address %u", (unsigned)candidate);
       return;
     }
-    ESP_LOGD(TAG, "Address %u already taken, trying next", (unsigned) candidate);
+    ESP_LOGD(TAG, "Address %u already taken, trying next", (unsigned)candidate);
   }
 
   this->address_ = ADDRESS_UNREGISTERED;
-  ESP_LOGW(TAG, "All %s addresses are taken: falling back to listen-only (0xF)",
-           device_type_name(this->device_type_));
+  ESP_LOGW(TAG, "All %s addresses are taken: falling back to listen-only (0xF)", device_type_name(this->device_type_));
 }
 
 bool HdmiCec::poll_address_(uint8_t addr) {
@@ -363,8 +446,7 @@ void IRAM_ATTR HdmiCec::gpio_edge_isr(void *arg) {
     self->cur_block_ = 0;
     return;
   }
-  if (!self->in_frame_isr_)
-    return;
+  if (!self->in_frame_isr_) return;
 
   bool one = (low >= 350 && low <= 950);
   bool zero = (low >= 1200 && low <= 1900);
@@ -374,13 +456,13 @@ void IRAM_ATTR HdmiCec::gpio_edge_isr(void *arg) {
   }
   if (self->bit_idx_ < 9) {
     // Bits 0-7: data; bit 8: EOM.
-    self->cur_block_ = (uint16_t) ((self->cur_block_ << 1) | (one ? 1 : 0));
+    self->cur_block_ = (uint16_t)((self->cur_block_ << 1) | (one ? 1 : 0));
     self->bit_idx_++;
     if (self->bit_idx_ == 9 && self->first_block_) {
       // Header complete: acknowledge only frames directed at our address, never
       // broadcasts (an ACK on a broadcast means "rejected") and never while
       // unregistered — 0xF is also the broadcast address, so it must not match.
-      uint8_t dest = (uint8_t) ((self->cur_block_ >> 1) & 0x0F);
+      uint8_t dest = (uint8_t)((self->cur_block_ >> 1) & 0x0F);
       self->frame_for_us_ = (dest == self->address_) && (self->address_ != ADDRESS_UNREGISTERED);
     }
   } else {
@@ -400,8 +482,7 @@ bool IRAM_ATTR HdmiCec::ack_timer_cb(gptimer_handle_t timer, const gptimer_alarm
 }
 
 void HdmiCec::setup_ack_() {
-  if (this->tx_channel_ == nullptr)
-    return;  // the ACK reuses the open-drain pad configured by the TX channel
+  if (this->tx_channel_ == nullptr) return;  // the ACK reuses the open-drain pad configured by the TX channel
 
   gpio_num_t pin = static_cast<gpio_num_t>(this->pin_);
   // Remember the current output routing (the RMT TX signal) so it can be
@@ -416,7 +497,7 @@ void HdmiCec::setup_ack_() {
   tcfg.resolution_hz = 1 * 1000 * 1000;
   esp_err_t err = gptimer_new_timer(&tcfg, &this->ack_timer_);
   if (err != ESP_OK) {
-    ESP_LOGW(TAG, "gptimer unavailable (%d): receiver ACK disabled", (int) err);
+    ESP_LOGW(TAG, "gptimer unavailable (%d): receiver ACK disabled", (int)err);
     this->ack_timer_ = nullptr;
     return;
   }
@@ -435,7 +516,7 @@ void HdmiCec::setup_ack_() {
   // and stopped from ISR context above.
   err = gpio_install_isr_service(0);
   if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {  // INVALID_STATE = already installed
-    ESP_LOGW(TAG, "GPIO ISR service unavailable (%d): receiver ACK disabled", (int) err);
+    ESP_LOGW(TAG, "GPIO ISR service unavailable (%d): receiver ACK disabled", (int)err);
     return;
   }
   gpio_set_intr_type(pin, GPIO_INTR_ANYEDGE);
@@ -461,10 +542,9 @@ void HdmiCec::setup_tx_() {
     rmt_copy_encoder_config_t enc_cfg = {};
     err = rmt_new_copy_encoder(&enc_cfg, &this->tx_encoder_);
   }
-  if (err == ESP_OK)
-    err = rmt_enable(this->tx_channel_);
+  if (err == ESP_OK) err = rmt_enable(this->tx_channel_);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "TX channel unavailable: %d (receive-only)", (int) err);
+    ESP_LOGE(TAG, "TX channel unavailable: %d (receive-only)", (int)err);
     this->tx_channel_ = nullptr;
     return;
   }
@@ -489,8 +569,7 @@ bool HdmiCec::send_from(uint8_t initiator, uint8_t dest, const std::vector<uint8
   }
 
   // retransmit == 0: fire and forget, no wait for the acknowledgement.
-  if (this->retransmit_ == 0)
-    return this->tx_frame_(initiator, dest, payload);
+  if (this->retransmit_ == 0) return this->tx_frame_(initiator, dest, payload);
 
   // Otherwise up to `retransmit` attempts, stopping as soon as the frame is
   // acknowledged. A broadcast is reported acknowledged unless a follower
@@ -501,21 +580,20 @@ bool HdmiCec::send_from(uint8_t initiator, uint8_t dest, const std::vector<uint8
       vTaskDelay(pdMS_TO_TICKS(20));  // bus busy: back off and retry
       continue;
     }
-    if (acked)
-      return true;
+    if (acked) return true;
     if (attempt + 1 < this->retransmit_) {
       this->retransmits_++;
       vTaskDelay(pdMS_TO_TICKS(45));  // mandated inter-attempt spacing
     }
   }
-  ESP_LOGW(TAG, "Frame to %u not acknowledged after %u attempts", (unsigned) dest, (unsigned) this->retransmit_);
+  ESP_LOGW(TAG, "Frame to %u not acknowledged after %u attempts", (unsigned)dest, (unsigned)this->retransmit_);
   return false;
 }
 
 bool HdmiCec::tx_and_confirm_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload, bool *acked) {
   this->tx_seen_ = false;
   this->tx_acked_ = false;
-  this->tx_wait_header_ = (uint8_t) (((initiator & 0x0F) << 4) | (dest & 0x0F));
+  this->tx_wait_header_ = (uint8_t)(((initiator & 0x0F) << 4) | (dest & 0x0F));
   this->tx_wait_has_op_ = !payload.empty();
   this->tx_wait_op_ = payload.empty() ? 0 : payload[0];
   this->tx_wait_ = true;
@@ -524,12 +602,10 @@ bool HdmiCec::tx_and_confirm_(uint8_t initiator, uint8_t dest, const std::vector
   if (sent) {
     // Wait for the RX task to decode our self-capture (~8 ms after the frame
     // ends). 40 ms is comfortable headroom on a quiet bus.
-    for (int i = 0; i < 8 && !this->tx_seen_; i++)
-      vTaskDelay(pdMS_TO_TICKS(5));
+    for (int i = 0; i < 8 && !this->tx_seen_; i++) vTaskDelay(pdMS_TO_TICKS(5));
   }
   this->tx_wait_ = false;
-  if (acked != nullptr)
-    *acked = this->tx_seen_ && this->tx_acked_;
+  if (acked != nullptr) *acked = this->tx_seen_ && this->tx_acked_;
   return sent;
 }
 
@@ -543,7 +619,7 @@ bool HdmiCec::tx_frame_(uint8_t initiator, uint8_t dest, const std::vector<uint8
     return false;
   }
   if (payload.size() > 14) {
-    ESP_LOGW(TAG, "Invalid payload (%u bytes)", (unsigned) payload.size());
+    ESP_LOGW(TAG, "Invalid payload (%u bytes)", (unsigned)payload.size());
     return false;
   }
 
@@ -559,9 +635,8 @@ bool HdmiCec::tx_frame_(uint8_t initiator, uint8_t dest, const std::vector<uint8
 
   uint8_t blocks[15];
   size_t num_blocks = 0;
-  blocks[num_blocks++] = (uint8_t) (((initiator & 0x0F) << 4) | (dest & 0x0F));
-  for (uint8_t b : payload)
-    blocks[num_blocks++] = b;
+  blocks[num_blocks++] = (uint8_t)(((initiator & 0x0F) << 4) | (dest & 0x0F));
+  for (uint8_t b : payload) blocks[num_blocks++] = b;
 
   size_t n = 0;
   this->tx_symbols_[n].level0 = 0;
@@ -594,14 +669,13 @@ bool HdmiCec::tx_frame_(uint8_t initiator, uint8_t dest, const std::vector<uint8
   txc.flags.eot_level = 1;  // leave the line released when the frame ends
   esp_err_t err =
       rmt_transmit(this->tx_channel_, this->tx_encoder_, this->tx_symbols_, n * sizeof(rmt_symbol_word_t), &txc);
-  if (err == ESP_OK)
-    err = rmt_tx_wait_all_done(this->tx_channel_, 300);
+  if (err == ESP_OK) err = rmt_tx_wait_all_done(this->tx_channel_, 300);
   if (err != ESP_OK) {
-    ESP_LOGW(TAG, "Transmission failed: %d", (int) err);
+    ESP_LOGW(TAG, "Transmission failed: %d", (int)err);
     return false;
   }
   this->frames_sent_++;
-  ESP_LOGD(TAG, "Frame sent to %u (%u blocks)", (unsigned) dest, (unsigned) num_blocks);
+  ESP_LOGD(TAG, "Frame sent to %u (%u blocks)", (unsigned)dest, (unsigned)num_blocks);
   return true;
 }
 
@@ -616,8 +690,7 @@ void HdmiCec::arm_receive_(rmt_symbol_word_t *buffer) {
   rx_cfg.signal_range_max_ns = 8 * 1000 * 1000;
   esp_err_t err = rmt_receive(this->rx_channel_, buffer, RX_SYMBOL_CAPACITY * sizeof(rmt_symbol_word_t), &rx_cfg);
   this->last_arm_err_ = err;
-  if (err != ESP_OK)
-    ESP_LOGW(TAG, "rmt_receive failed: %d", (int) err);
+  if (err != ESP_OK) ESP_LOGW(TAG, "rmt_receive failed: %d", (int)err);
 }
 
 void HdmiCec::loop() {
@@ -625,19 +698,17 @@ void HdmiCec::loop() {
   // to ESPHome entities and run automations.
   DecodedFrame f;
   for (int i = 0; i < 4 && this->frame_queue_ != nullptr && xQueueReceive(this->frame_queue_, &f, 0) == pdTRUE; i++) {
-    if (f.len == 0)
-      continue;
+    if (f.len == 0) continue;
 
     Frame frame;
-    frame.from = (uint8_t) (f.bytes[0] >> 4);
-    frame.to = (uint8_t) (f.bytes[0] & 0x0F);
+    frame.from = (uint8_t)(f.bytes[0] >> 4);
+    frame.to = (uint8_t)(f.bytes[0] & 0x0F);
     frame.is_broadcast = (frame.to == 0x0F);
     frame.opcode = 0;
     if (f.len > 1) {
       frame.opcode = f.bytes[1];
       frame.data.assign(f.bytes + 1, f.bytes + f.len);
-      if (f.len > 2)
-        frame.params.assign(f.bytes + 2, f.bytes + f.len);
+      if (f.len > 2) frame.params.assign(f.bytes + 2, f.bytes + f.len);
     }
 
     // Registry and semantic triggers snoop every frame, regardless of addressing.
@@ -646,15 +717,13 @@ void HdmiCec::loop() {
 
     // Legacy internal handler (set_frame_handler): sees every decoded frame,
     // with `data` being the payload after the header (including the opcode).
-    if (this->frame_handler_)
-      this->frame_handler_(frame.from, frame.to, frame.data);
+    if (this->frame_handler_) this->frame_handler_(frame.from, frame.to, frame.data);
 
     // on_frame triggers. Unless promiscuous, only frames addressed to us (or
     // broadcast) reach them.
     bool for_us = frame.is_broadcast || frame.to == this->address_;
     if (this->promiscuous_mode_ || for_us) {
-      for (auto *trigger : this->frame_triggers_)
-        trigger->process(frame);
+      for (auto *trigger : this->frame_triggers_) trigger->process(frame);
     }
 
     // Answer standard queries on our own, if enabled.
@@ -669,8 +738,7 @@ void HdmiCec::rx_task_trampoline(void *arg) { static_cast<HdmiCec *>(arg)->rx_ta
 void HdmiCec::rx_task_() {
   RxDoneEvent evt;
   while (true) {
-    if (xQueueReceive(this->rx_queue_, &evt, portMAX_DELAY) != pdTRUE)
-      continue;
+    if (xQueueReceive(this->rx_queue_, &evt, portMAX_DELAY) != pdTRUE) continue;
     // Re-arm FIRST, on the other buffer (the capture we received owns its own),
     // so the receive window reopens as fast as possible; then decode.
     this->next_buffer_ ^= 1;
@@ -690,11 +758,9 @@ void HdmiCec::decode_capture_(const rmt_symbol_word_t *syms, size_t n) {
   bool last_ack_low = false;
 
   auto flush_frame = [&]() {
-    if (num_bytes == 0)
-      return;
+    if (num_bytes == 0) return;
     char hex[3 * 16 + 1] = {0};
-    for (size_t i = 0; i < num_bytes; i++)
-      snprintf(hex + i * 3, 4, "%02X:", bytes[i]);
+    for (size_t i = 0; i < num_bytes; i++) snprintf(hex + i * 3, 4, "%02X:", bytes[i]);
     hex[num_bytes * 3 - 1] = '\0';
     uint8_t initiator = bytes[0] >> 4;
     uint8_t dest = bytes[0] & 0x0F;
@@ -716,7 +782,7 @@ void HdmiCec::decode_capture_(const rmt_symbol_word_t *syms, size_t n) {
     this->frames_decoded_++;
     if (this->frame_queue_ != nullptr) {
       DecodedFrame f;
-      f.len = (uint8_t) num_bytes;
+      f.len = (uint8_t)num_bytes;
       memcpy(f.bytes, bytes, num_bytes);
       xQueueSend(this->frame_queue_, &f, 0);  // queue full → frame dropped
     }
@@ -734,8 +800,7 @@ void HdmiCec::decode_capture_(const rmt_symbol_word_t *syms, size_t n) {
       block = 0;
       continue;
     }
-    if (!in_frame)
-      continue;
+    if (!in_frame) continue;
 
     bool bit;
     if (low_us >= ONE_LOW_MIN && low_us <= ONE_LOW_MAX) {
@@ -752,8 +817,7 @@ void HdmiCec::decode_capture_(const rmt_symbol_word_t *syms, size_t n) {
     block = (block << 1) | (bit ? 1 : 0);
     bit_count++;
     if (bit_count == 10) {
-      if (num_bytes < sizeof(bytes))
-        bytes[num_bytes++] = (block >> 2) & 0xFF;
+      if (num_bytes < sizeof(bytes)) bytes[num_bytes++] = (block >> 2) & 0xFF;
       last_eom = (block & 0b10) != 0;
       last_ack_low = (block & 0b01) == 0;  // "0" = somebody pulled the line
       bit_count = 0;
@@ -765,64 +829,59 @@ void HdmiCec::decode_capture_(const rmt_symbol_word_t *syms, size_t n) {
 
 void HdmiCec::dump_config() {
   ESP_LOGCONFIG(TAG, "HDMI-CEC:");
-  ESP_LOGCONFIG(TAG, "  Pin: GPIO%u", (unsigned) this->pin_);
+  ESP_LOGCONFIG(TAG, "  Pin: GPIO%u", (unsigned)this->pin_);
   ESP_LOGCONFIG(TAG, "  Device type: %s", device_type_name(this->device_type_));
   if (this->monitor_mode_) {
-    ESP_LOGCONFIG(TAG, "  Logical address: 0x%X (monitor mode, listen-only)", (unsigned) this->address_);
+    ESP_LOGCONFIG(TAG, "  Logical address: 0x%X (monitor mode, listen-only)", (unsigned)this->address_);
   } else {
-    ESP_LOGCONFIG(TAG, "  Logical address: 0x%X (%s)", (unsigned) this->address_,
+    ESP_LOGCONFIG(TAG, "  Logical address: 0x%X (%s)", (unsigned)this->address_,
                   this->negotiated_ ? "negotiated" : "configured");
   }
   if (this->physical_address_ == PHYSICAL_ADDRESS_NONE) {
     ESP_LOGCONFIG(TAG, "  Physical address: none (advertising nothing)");
   } else {
-    ESP_LOGCONFIG(TAG, "  Physical address: %u.%u.%u.%u", (unsigned) ((this->physical_address_ >> 12) & 0xF),
-                  (unsigned) ((this->physical_address_ >> 8) & 0xF), (unsigned) ((this->physical_address_ >> 4) & 0xF),
-                  (unsigned) (this->physical_address_ & 0xF));
+    ESP_LOGCONFIG(TAG, "  Physical address: %u.%u.%u.%u", (unsigned)((this->physical_address_ >> 12) & 0xF),
+                  (unsigned)((this->physical_address_ >> 8) & 0xF), (unsigned)((this->physical_address_ >> 4) & 0xF),
+                  (unsigned)(this->physical_address_ & 0xF));
   }
   ESP_LOGCONFIG(TAG, "  OSD name: '%s'", this->osd_name_.c_str());
-  if (this->vendor_id_ != 0)
-    ESP_LOGCONFIG(TAG, "  Vendor ID: 0x%06X", (unsigned) this->vendor_id_);
+  if (this->vendor_id_ != 0) ESP_LOGCONFIG(TAG, "  Vendor ID: 0x%06X", (unsigned)this->vendor_id_);
   ESP_LOGCONFIG(TAG, "  auto_respond: %s, promiscuous: %s, retransmit: %u, poll: %us",
-                this->auto_respond_ ? "yes" : "no", this->promiscuous_mode_ ? "yes" : "no",
-                (unsigned) this->retransmit_, (unsigned) (this->update_interval_ / 1000));
+                this->auto_respond_ ? "yes" : "no", this->promiscuous_mode_ ? "yes" : "no", (unsigned)this->retransmit_,
+                (unsigned)(this->update_interval_ / 1000));
   if (!this->devices_.empty()) {
     ESP_LOGCONFIG(TAG, "  Tracked devices:");
     for (const auto &d : this->devices_) {
       const DeviceState &s = this->states_[d.address & 0x0F];
       const char *power = s.power == POWER_ON ? "on" : (s.power == POWER_STANDBY ? "standby" : "unknown");
       if (s.volume_known)
-        ESP_LOGCONFIG(TAG, "    %s (0x%X): power=%s volume=%u mute=%d", d.name.c_str(), (unsigned) d.address, power,
-                      (unsigned) s.volume, s.mute);
+        ESP_LOGCONFIG(TAG, "    %s (0x%X): power=%s volume=%u mute=%d", d.name.c_str(), (unsigned)d.address, power,
+                      (unsigned)s.volume, s.mute);
       else
-        ESP_LOGCONFIG(TAG, "    %s (0x%X): power=%s", d.name.c_str(), (unsigned) d.address, power);
+        ESP_LOGCONFIG(TAG, "    %s (0x%X): power=%s", d.name.c_str(), (unsigned)d.address, power);
     }
   }
   ESP_LOGCONFIG(TAG, "  RX channel: %s, DMA: %s, last arm: %s (%d)",
                 this->rx_channel_ != nullptr ? "created" : "MISSING", this->dma_used_ ? "yes" : "no",
-                this->last_arm_err_ == ESP_OK ? "OK" : "ERROR", (int) this->last_arm_err_);
+                this->last_arm_err_ == ESP_OK ? "OK" : "ERROR", (int)this->last_arm_err_);
   ESP_LOGCONFIG(TAG, "  TX channel: %s, receiver ACK: %s", this->tx_channel_ != nullptr ? "ready" : "MISSING",
                 this->ack_timer_ != nullptr ? "active" : "MISSING");
   ESP_LOGCONFIG(TAG, "  Raw captures: %u, frames decoded: %u, sent: %u, retransmits: %u, ACKs sent: %u, errors: %u",
-                (unsigned) this->raw_events_, (unsigned) this->frames_decoded_, (unsigned) this->frames_sent_,
-                (unsigned) this->retransmits_, (unsigned) this->acks_sent_, (unsigned) this->decode_errors_);
+                (unsigned)this->raw_events_, (unsigned)this->frames_decoded_, (unsigned)this->frames_sent_,
+                (unsigned)this->retransmits_, (unsigned)this->acks_sent_, (unsigned)this->decode_errors_);
 }
 
 uint8_t HdmiCec::address_of(const std::string &name) const {
   for (const auto &d : this->devices_)
-    if (d.name == name)
-      return d.address;
+    if (d.name == name) return d.address;
   return 0xFF;
 }
 
 uint8_t HdmiCec::resolve_address(const std::string &token) const {
-  if (token == "us")
-    return this->address_;
-  if (token == "broadcast")
-    return 0x0F;
+  if (token == "us") return this->address_;
+  if (token == "broadcast") return 0x0F;
   uint8_t named = this->address_of(token);
-  if (named != 0xFF)
-    return named;
+  if (named != 0xFF) return named;
   ESP_LOGW(TAG, "Unknown address '%s', falling back to broadcast", token.c_str());
   return 0x0F;
 }
@@ -840,7 +899,7 @@ void HdmiCec::update_registry_(const Frame &frame) {
         PowerState p = (frame.params[0] == 0x00 || frame.params[0] == 0x02) ? POWER_ON : POWER_STANDBY;
         if (st.power != p) {
           st.power = p;
-          ESP_LOGD(TAG, "device 0x%X power=%s", (unsigned) frame.from, p == POWER_ON ? "on" : "standby");
+          ESP_LOGD(TAG, "device 0x%X power=%s", (unsigned)frame.from, p == POWER_ON ? "on" : "standby");
         }
       }
       if (this->poll_in_flight_ && this->poll_wait_opcode_ == 0x90 && frame.from == this->poll_wait_addr_)
@@ -851,22 +910,22 @@ void HdmiCec::update_registry_(const Frame &frame) {
         st.mute = (frame.params[0] & 0x80) != 0;
         st.volume = frame.params[0] & 0x7F;
         st.volume_known = true;
-        ESP_LOGD(TAG, "device 0x%X volume=%u mute=%d", (unsigned) frame.from, (unsigned) st.volume, st.mute);
+        ESP_LOGD(TAG, "device 0x%X volume=%u mute=%d", (unsigned)frame.from, (unsigned)st.volume, st.mute);
       }
       if (this->poll_in_flight_ && this->poll_wait_opcode_ == 0x7A && frame.from == this->poll_wait_addr_)
         this->poll_in_flight_ = false;
       break;
     case 0x82:  // Active Source (broadcast) — params are a physical address
       if (frame.params.size() >= 2) {
-        st.active_source = (uint16_t) (frame.params[0] << 8) | frame.params[1];
+        st.active_source = (uint16_t)(frame.params[0] << 8) | frame.params[1];
         this->current_active_source_ = st.active_source;
-        ESP_LOGD(TAG, "device 0x%X active source=%04X", (unsigned) frame.from, (unsigned) st.active_source);
+        ESP_LOGD(TAG, "device 0x%X active source=%04X", (unsigned)frame.from, (unsigned)st.active_source);
       }
       break;
     case 0x47:  // Set OSD Name
       if (!frame.params.empty()) {
         st.osd_name.assign(frame.params.begin(), frame.params.end());
-        ESP_LOGD(TAG, "device 0x%X osd_name='%s'", (unsigned) frame.from, st.osd_name.c_str());
+        ESP_LOGD(TAG, "device 0x%X osd_name='%s'", (unsigned)frame.from, st.osd_name.c_str());
       }
       break;
     default:
@@ -878,8 +937,7 @@ void HdmiCec::update_registry_(const Frame &frame) {
 // never a flood. Round-robin over the tracked devices, one query in flight at a
 // time, and never while the bus was busy in the last 200 ms.
 void HdmiCec::poll_registry_() {
-  if (this->poll_targets_.empty() || this->monitor_mode_ || this->tx_channel_ == nullptr)
-    return;
+  if (this->poll_targets_.empty() || this->monitor_mode_ || this->tx_channel_ == nullptr) return;
 
   uint32_t now = millis();
   if (this->poll_in_flight_) {
@@ -888,10 +946,8 @@ void HdmiCec::poll_registry_() {
     else
       return;
   }
-  if (now - this->last_poll_ms_ < this->update_interval_)
-    return;
-  if (now - this->last_rx_ms_ < 200)
-    return;  // bus busy: back off
+  if (now - this->last_poll_ms_ < this->update_interval_) return;
+  if (now - this->last_rx_ms_ < 200) return;  // bus busy: back off
 
   const std::pair<uint8_t, uint8_t> &target = this->poll_targets_[this->poll_index_ % this->poll_targets_.size()];
   this->poll_index_++;
@@ -918,14 +974,10 @@ void HdmiCec::feature_abort_(uint8_t initiator, uint8_t opcode) {
 }
 
 void HdmiCec::handle_housekeeping_(const Frame &frame) {
-  if (!this->auto_respond_ || this->monitor_mode_)
-    return;
-  if (frame.from == this->address_)
-    return;  // our own transmission, seen via the self-capture
-  if (frame.to != this->address_)
-    return;  // only directly addressed — never broadcasts or other devices
-  if (frame.data.empty())
-    return;  // header-only polling message: the receiver ACK is the whole answer
+  if (!this->auto_respond_ || this->monitor_mode_) return;
+  if (frame.from == this->address_) return;  // our own transmission, seen via the self-capture
+  if (frame.to != this->address_) return;    // only directly addressed — never broadcasts or other devices
+  if (frame.data.empty()) return;            // header-only polling message: the receiver ACK is the whole answer
 
   uint8_t initiator = frame.from;
   switch (frame.opcode) {
@@ -952,9 +1004,9 @@ void HdmiCec::handle_housekeeping_(const Frame &frame) {
       break;
     case 0x8C:  // Give Device Vendor ID → Device Vendor ID (broadcast)
       if (this->vendor_id_ != 0) {
-        this->send_from(this->address_, 0x0F,
-                        {0x87, (uint8_t) (this->vendor_id_ >> 16), (uint8_t) (this->vendor_id_ >> 8),
-                         (uint8_t) (this->vendor_id_)});
+        this->send_from(
+            this->address_, 0x0F,
+            {0x87, (uint8_t)(this->vendor_id_ >> 16), (uint8_t)(this->vendor_id_ >> 8), (uint8_t)(this->vendor_id_)});
       } else {
         this->feature_abort_(initiator, frame.opcode);
       }
@@ -975,38 +1027,32 @@ void HdmiCec::process_semantic_(const Frame &frame) {
       if (!frame.params.empty()) {
         uint8_t code = frame.params[0];
         std::string name = key_name(code);
-        for (auto *t : this->key_press_triggers_)
-          t->trigger(name, code, frame.from);
+        for (auto *t : this->key_press_triggers_) t->trigger(name, code, frame.from);
       }
       break;
     case 0x45:  // User Control Released (carries no operand)
-      for (auto *t : this->key_release_triggers_)
-        t->trigger(std::string(), (uint8_t) 0, frame.from);
+      for (auto *t : this->key_release_triggers_) t->trigger(std::string(), (uint8_t)0, frame.from);
       break;
     case 0x36:  // Standby
-      for (auto *t : this->standby_triggers_)
-        t->trigger(frame.from);
+      for (auto *t : this->standby_triggers_) t->trigger(frame.from);
       break;
     case 0x82:  // Active Source — params are a physical address
       if (frame.params.size() >= 2) {
-        uint16_t pa = (uint16_t) (frame.params[0] << 8) | frame.params[1];
-        for (auto *t : this->active_source_triggers_)
-          t->trigger(pa, frame.from);
+        uint16_t pa = (uint16_t)(frame.params[0] << 8) | frame.params[1];
+        for (auto *t : this->active_source_triggers_) t->trigger(pa, frame.from);
       }
       break;
     case 0x7A:  // Report Audio Status
       if (!frame.params.empty()) {
         uint8_t volume = frame.params[0] & 0x7F;
         bool mute = (frame.params[0] & 0x80) != 0;
-        for (auto *t : this->volume_triggers_)
-          t->trigger(volume, mute, frame.from);
+        for (auto *t : this->volume_triggers_) t->trigger(volume, mute, frame.from);
       }
       break;
     case 0x90:  // Report Power Status
       if (!frame.params.empty()) {
         bool on = (frame.params[0] == 0x00 || frame.params[0] == 0x02);
-        for (auto *t : this->power_triggers_)
-          t->trigger(on, frame.from);
+        for (auto *t : this->power_triggers_) t->trigger(on, frame.from);
       }
       break;
     default:

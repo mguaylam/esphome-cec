@@ -1,9 +1,5 @@
 #pragma once
 
-#include "esphome/core/automation.h"
-#include "esphome/core/component.h"
-#include "esphome/core/log.h"
-
 #include <driver/gptimer.h>
 #include <driver/rmt_rx.h>
 #include <driver/rmt_tx.h>
@@ -15,6 +11,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "esphome/core/automation.h"
+#include "esphome/core/component.h"
+#include "esphome/core/log.h"
 
 namespace esphome {
 namespace hdmi_cec {
@@ -153,7 +153,9 @@ class HdmiCec : public Component {
     (release ? this->key_release_triggers_ : this->key_press_triggers_).push_back(trigger);
   }
   void register_standby_trigger(StandbyTrigger *trigger) { this->standby_triggers_.push_back(trigger); }
-  void register_active_source_trigger(ActiveSourceTrigger *trigger) { this->active_source_triggers_.push_back(trigger); }
+  void register_active_source_trigger(ActiveSourceTrigger *trigger) {
+    this->active_source_triggers_.push_back(trigger);
+  }
   void register_volume_trigger(VolumeTrigger *trigger) { this->volume_triggers_.push_back(trigger); }
   void register_power_trigger(PowerTrigger *trigger) { this->power_triggers_.push_back(trigger); }
 
@@ -343,17 +345,14 @@ class HdmiCecFrameTrigger : public Trigger<Frame> {
   void set_to(int16_t addr) { this->to_ = addr; }
 
   void process(const Frame &frame) {
-    if (this->opcode_ >= 0 && (frame.data.empty() || frame.opcode != (uint8_t) this->opcode_))
-      return;
+    if (this->opcode_ >= 0 && (frame.data.empty() || frame.opcode != (uint8_t)this->opcode_)) return;
     if (this->from_ != -1) {
-      uint8_t want = (this->from_ == -2) ? this->parent_->address() : (uint8_t) this->from_;
-      if (frame.from != want)
-        return;
+      uint8_t want = (this->from_ == -2) ? this->parent_->address() : (uint8_t)this->from_;
+      if (frame.from != want) return;
     }
     if (this->to_ != -1) {
-      uint8_t want = (this->to_ == -2) ? this->parent_->address() : (uint8_t) this->to_;
-      if (frame.to != want)
-        return;
+      uint8_t want = (this->to_ == -2) ? this->parent_->address() : (uint8_t)this->to_;
+      if (frame.to != want) return;
     }
     this->trigger(frame);
   }
@@ -368,7 +367,8 @@ class HdmiCecFrameTrigger : public Trigger<Frame> {
 // hdmi_cec.transmit: structured (opcode [+ params]) or raw. Addresses given as a
 // name/"us"/"broadcast" are resolved at runtime via a token; numbers and lambdas
 // go through the templatable value.
-template<typename... Ts> class TransmitAction : public Action<Ts...> {
+template <typename... Ts>
+class TransmitAction : public Action<Ts...> {
  public:
   explicit TransmitAction(HdmiCec *parent) : parent_(parent) {}
   TEMPLATABLE_VALUE(uint8_t, to)
@@ -452,7 +452,8 @@ class PowerTrigger : public Trigger<bool, uint8_t> {
 // ── Semantic (Layer 3) actions ───────────────────────────────────────────────
 // Resolves a device destination the same way TransmitAction does: a name/keyword
 // token, a templatable value, or (when neither is set) the broadcast address.
-template<typename... Ts> class SemanticActionBase : public Action<Ts...> {
+template <typename... Ts>
+class SemanticActionBase : public Action<Ts...> {
  public:
   explicit SemanticActionBase(HdmiCec *parent) : parent_(parent) {}
   TEMPLATABLE_VALUE(uint8_t, device)
@@ -464,10 +465,8 @@ template<typename... Ts> class SemanticActionBase : public Action<Ts...> {
 
  protected:
   uint8_t resolve_device_(Ts... x) {
-    if (this->has_device_token_)
-      return this->parent_->resolve_address(this->device_token_);
-    if (this->has_device_value_)
-      return this->device_.value(x...);
+    if (this->has_device_token_) return this->parent_->resolve_address(this->device_token_);
+    if (this->has_device_value_) return this->device_.value(x...);
     return 0x0F;  // broadcast
   }
   HdmiCec *parent_;
@@ -477,7 +476,8 @@ template<typename... Ts> class SemanticActionBase : public Action<Ts...> {
 };
 
 // power_on (Image View On) and standby (Standby): a fixed opcode to a device.
-template<typename... Ts> class OpcodeAction : public SemanticActionBase<Ts...> {
+template <typename... Ts>
+class OpcodeAction : public SemanticActionBase<Ts...> {
  public:
   OpcodeAction(HdmiCec *parent, uint8_t opcode) : SemanticActionBase<Ts...>(parent), opcode_(opcode) {}
   void play(Ts... x) override { this->parent_->send(this->resolve_device_(x...), {this->opcode_}); }
@@ -487,7 +487,8 @@ template<typename... Ts> class OpcodeAction : public SemanticActionBase<Ts...> {
 };
 
 // key_press and volume: User Control Pressed(code) then Released to a device.
-template<typename... Ts> class KeyPressAction : public SemanticActionBase<Ts...> {
+template <typename... Ts>
+class KeyPressAction : public SemanticActionBase<Ts...> {
  public:
   explicit KeyPressAction(HdmiCec *parent) : SemanticActionBase<Ts...>(parent) {}
   TEMPLATABLE_VALUE(uint8_t, key)
@@ -500,7 +501,8 @@ template<typename... Ts> class KeyPressAction : public SemanticActionBase<Ts...>
 };
 
 // active_source: broadcast Active Source with our configured physical address.
-template<typename... Ts> class ActiveSourceAction : public Action<Ts...> {
+template <typename... Ts>
+class ActiveSourceAction : public Action<Ts...> {
  public:
   explicit ActiveSourceAction(HdmiCec *parent) : parent_(parent) {}
   void play(Ts... x) override {
@@ -509,8 +511,7 @@ template<typename... Ts> class ActiveSourceAction : public Action<Ts...> {
       ESP_LOGW("hdmi_cec", "active_source: no physical_address configured, nothing to announce");
       return;
     }
-    this->parent_->send_from(this->parent_->address(), 0x0F,
-                             {0x82, (uint8_t) (pa >> 8), (uint8_t) (pa & 0xFF)});
+    this->parent_->send_from(this->parent_->address(), 0x0F, {0x82, (uint8_t)(pa >> 8), (uint8_t)(pa & 0xFF)});
   }
 
  protected:

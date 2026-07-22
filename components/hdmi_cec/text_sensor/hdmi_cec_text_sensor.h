@@ -1,12 +1,11 @@
 #pragma once
 
-#include "esphome/components/text_sensor/text_sensor.h"
-#include "esphome/core/component.h"
-#include "esphome/core/log.h"
-
 #include <string>
 
 #include "../hdmi_cec.h"
+#include "esphome/components/text_sensor/text_sensor.h"
+#include "esphome/core/component.h"
+#include "esphome/core/log.h"
 
 namespace esphome {
 namespace hdmi_cec {
@@ -35,13 +34,11 @@ class HdmiCecTextSensor : public text_sensor::TextSensor, public PollingComponen
   }
 
   void update() override {
-    if (this->address_ == 0xFF)
-      return;
+    if (this->address_ == 0xFF) return;
     std::string value;
     if (this->type_ == HDMI_CEC_TEXT_OSD_NAME) {
       value = this->parent_->osd_name_of(this->address_);
-      if (value.empty())
-        return;  // not learned yet
+      if (value.empty()) return;  // not learned yet
     } else {
       switch (this->parent_->power_of(this->address_)) {
         case POWER_ON:
@@ -55,8 +52,7 @@ class HdmiCecTextSensor : public text_sensor::TextSensor, public PollingComponen
           break;
       }
     }
-    if (!this->has_state() || this->state != value)
-      this->publish_state(value);
+    if (!this->has_state() || this->state != value) this->publish_state(value);
   }
 
  protected:

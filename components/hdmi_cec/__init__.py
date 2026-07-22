@@ -21,15 +21,27 @@ CODEOWNERS = ["@mguaylam"]
 hdmi_cec_ns = cg.esphome_ns.namespace("hdmi_cec")
 HdmiCec = hdmi_cec_ns.class_("HdmiCec", cg.Component)
 Frame = hdmi_cec_ns.struct("Frame")
-HdmiCecFrameTrigger = hdmi_cec_ns.class_("HdmiCecFrameTrigger", automation.Trigger.template(Frame))
+HdmiCecFrameTrigger = hdmi_cec_ns.class_(
+    "HdmiCecFrameTrigger", automation.Trigger.template(Frame)
+)
 TransmitAction = hdmi_cec_ns.class_("TransmitAction", automation.Action)
 
 # Layer 3 semantic triggers.
-KeyTrigger = hdmi_cec_ns.class_("KeyTrigger", automation.Trigger.template(cg.std_string, cg.uint8, cg.uint8))
-StandbyTrigger = hdmi_cec_ns.class_("StandbyTrigger", automation.Trigger.template(cg.uint8))
-ActiveSourceTrigger = hdmi_cec_ns.class_("ActiveSourceTrigger", automation.Trigger.template(cg.uint16, cg.uint8))
-VolumeTrigger = hdmi_cec_ns.class_("VolumeTrigger", automation.Trigger.template(cg.uint8, cg.bool_, cg.uint8))
-PowerTrigger = hdmi_cec_ns.class_("PowerTrigger", automation.Trigger.template(cg.bool_, cg.uint8))
+KeyTrigger = hdmi_cec_ns.class_(
+    "KeyTrigger", automation.Trigger.template(cg.std_string, cg.uint8, cg.uint8)
+)
+StandbyTrigger = hdmi_cec_ns.class_(
+    "StandbyTrigger", automation.Trigger.template(cg.uint8)
+)
+ActiveSourceTrigger = hdmi_cec_ns.class_(
+    "ActiveSourceTrigger", automation.Trigger.template(cg.uint16, cg.uint8)
+)
+VolumeTrigger = hdmi_cec_ns.class_(
+    "VolumeTrigger", automation.Trigger.template(cg.uint8, cg.bool_, cg.uint8)
+)
+PowerTrigger = hdmi_cec_ns.class_(
+    "PowerTrigger", automation.Trigger.template(cg.bool_, cg.uint8)
+)
 
 # Layer 3 semantic actions.
 OpcodeAction = hdmi_cec_ns.class_("OpcodeAction", automation.Action)
@@ -229,7 +241,9 @@ def _physical_address(value):
         return PHYSICAL_ADDRESS_NONE
     value = cv.hex_int(value)
     if not 0 <= value <= 0xFFFF:
-        raise cv.Invalid("A CEC physical address is a 16-bit value, e.g. 0x1000, or 'none'")
+        raise cv.Invalid(
+            "A CEC physical address is a 16-bit value, e.g. 0x1000, or 'none'"
+        )
     if value == PHYSICAL_ADDRESS_NONE:
         raise cv.Invalid("0xFFFF is reserved; use 'none' to advertise nothing")
     return value
@@ -336,17 +350,23 @@ CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(HdmiCec),
         cv.Required(CONF_PIN): pins.internal_gpio_input_pin_number,
-        cv.Optional(CONF_DEVICE_TYPE, default="playback"): cv.enum(DEVICE_TYPES, lower=True),
+        cv.Optional(CONF_DEVICE_TYPE, default="playback"): cv.enum(
+            DEVICE_TYPES, lower=True
+        ),
         # Optional explicit logical address; when set it skips negotiation.
         cv.Optional(CONF_ADDRESS): _logical_address,
         cv.Optional(CONF_PHYSICAL_ADDRESS, default="none"): _physical_address,
-        cv.Optional(CONF_OSD_NAME, default="ESPHome"): cv.All(cv.string, cv.Length(max=14)),
+        cv.Optional(CONF_OSD_NAME, default="ESPHome"): cv.All(
+            cv.string, cv.Length(max=14)
+        ),
         cv.Optional(CONF_VENDOR_ID): cv.All(cv.hex_int, cv.Range(min=0, max=0xFFFFFF)),
         cv.Optional(CONF_AUTO_RESPOND, default=True): cv.boolean,
         cv.Optional(CONF_MONITOR_MODE, default=False): cv.boolean,
         cv.Optional(CONF_PROMISCUOUS_MODE, default=False): cv.boolean,
         cv.Optional(CONF_RETRANSMIT, default=5): cv.int_range(min=0, max=5),
-        cv.Optional(CONF_UPDATE_INTERVAL, default="30s"): cv.positive_time_period_milliseconds,
+        cv.Optional(
+            CONF_UPDATE_INTERVAL, default="30s"
+        ): cv.positive_time_period_milliseconds,
         cv.Optional(CONF_DEVICES, default={}): _devices,
         cv.Optional(CONF_ON_FRAME): automation.validate_automation(
             {
@@ -444,11 +464,15 @@ async def to_code(config):
     for conf in config.get(CONF_ON_VOLUME, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
         await automation.build_automation(
-            trigger, [(cg.uint8, "volume"), (cg.bool_, "mute"), (cg.uint8, "source")], conf
+            trigger,
+            [(cg.uint8, "volume"), (cg.bool_, "mute"), (cg.uint8, "source")],
+            conf,
         )
     for conf in config.get(CONF_ON_POWER, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
-        await automation.build_automation(trigger, [(cg.bool_, "on"), (cg.uint8, "source")], conf)
+        await automation.build_automation(
+            trigger, [(cg.bool_, "on"), (cg.uint8, "source")], conf
+        )
 
 
 def _validate_transmit(config):
@@ -478,7 +502,9 @@ TRANSMIT_SCHEMA = cv.All(
 
 async def _apply_action_address(var, which, value, args):
     if isinstance(value, str):  # "us", "broadcast", or a device-name token
-        cg.add(var.set_to_token(value) if which == CONF_TO else var.set_from_token(value))
+        cg.add(
+            var.set_to_token(value) if which == CONF_TO else var.set_from_token(value)
+        )
         return
     tmpl = await cg.templatable(value, args, cg.uint8)
     if which == CONF_TO:
@@ -510,7 +536,9 @@ async def transmit_action_to_code(config, action_id, template_arg, args):
         cg.add(var.set_raw(await _templatable_bytes(config[CONF_RAW], args)))
         cg.add(var.set_has_raw(True))
     else:
-        cg.add(var.set_opcode(await cg.templatable(config[CONF_OPCODE], args, cg.uint8)))
+        cg.add(
+            var.set_opcode(await cg.templatable(config[CONF_OPCODE], args, cg.uint8))
+        )
         cg.add(var.set_has_opcode(True))
         if CONF_PARAMS in config:
             cg.add(var.set_params(await _templatable_bytes(config[CONF_PARAMS], args)))
@@ -601,7 +629,9 @@ async def volume_to_code(config, action_id, template_arg, args):
 ACTIVE_SOURCE_SCHEMA = cv.Schema({cv.GenerateID(): cv.use_id(HdmiCec)})
 
 
-@automation.register_action("hdmi_cec.active_source", ActiveSourceAction, ACTIVE_SOURCE_SCHEMA)
+@automation.register_action(
+    "hdmi_cec.active_source", ActiveSourceAction, ACTIVE_SOURCE_SCHEMA
+)
 async def active_source_to_code(config, action_id, template_arg, args):
     parent = await cg.get_variable(config[CONF_ID])
     var = cg.new_Pvariable(action_id, template_arg, parent)
