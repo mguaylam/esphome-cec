@@ -317,26 +317,12 @@ bool HdmiCec::poll_address_(uint8_t addr) {
   // gpio_edge_isr), so we cannot acknowledge our own poll: a "yes" here always
   // means another device owns the address.
   for (int attempt = 0; attempt < 3; attempt++) {
-    this->probe_seen_ = false;
-    this->probe_acked_ = false;
-    this->probe_addr_ = static_cast<int8_t>(addr);
-
-    bool sent = this->tx_frame_(addr, addr, {});  // header-only polling message
-    if (sent) {
-      // Wait for the RX task to decode our self-capture (it closes ~8 ms after
-      // the frame ends, then is decoded). 80 ms is comfortable headroom.
-      for (int i = 0; i < 16 && !this->probe_seen_; i++)
-        vTaskDelay(pdMS_TO_TICKS(5));
-      this->probe_addr_ = -1;
-      if (this->probe_seen_)
-        return this->probe_acked_;
-    } else {
-      this->probe_addr_ = -1;
-      vTaskDelay(pdMS_TO_TICKS(20));  // bus busy: back off and retry
-    }
+    bool acked = false;
+    if (this->tx_and_confirm_(addr, addr, {}, &acked))  // header-only polling message
+      return acked;
+    vTaskDelay(pdMS_TO_TICKS(20));  // bus busy: back off and retry
   }
-  // Never saw our own poll come back: inconclusive. Assume free rather than
-  // stall the boot on a noisy bus.
+  // Never managed to send: inconclusive. Assume free rather than stall the boot.
   return false;
 }
 
@@ -501,7 +487,50 @@ bool HdmiCec::send_from(uint8_t initiator, uint8_t dest, const std::vector<uint8
     ESP_LOGW(TAG, "Empty payload rejected (a polling message is an internal operation, not send())");
     return false;
   }
-  return this->tx_frame_(initiator, dest, payload);
+
+  // retransmit == 0: fire and forget, no wait for the acknowledgement.
+  if (this->retransmit_ == 0)
+    return this->tx_frame_(initiator, dest, payload);
+
+  // Otherwise up to `retransmit` attempts, stopping as soon as the frame is
+  // acknowledged. A broadcast is reported acknowledged unless a follower
+  // rejected it, so it normally succeeds on the first attempt.
+  for (uint8_t attempt = 0; attempt < this->retransmit_; attempt++) {
+    bool acked = false;
+    if (!this->tx_and_confirm_(initiator, dest, payload, &acked)) {
+      vTaskDelay(pdMS_TO_TICKS(20));  // bus busy: back off and retry
+      continue;
+    }
+    if (acked)
+      return true;
+    if (attempt + 1 < this->retransmit_) {
+      this->retransmits_++;
+      vTaskDelay(pdMS_TO_TICKS(45));  // mandated inter-attempt spacing
+    }
+  }
+  ESP_LOGW(TAG, "Frame to %u not acknowledged after %u attempts", (unsigned) dest, (unsigned) this->retransmit_);
+  return false;
+}
+
+bool HdmiCec::tx_and_confirm_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload, bool *acked) {
+  this->tx_seen_ = false;
+  this->tx_acked_ = false;
+  this->tx_wait_header_ = (uint8_t) (((initiator & 0x0F) << 4) | (dest & 0x0F));
+  this->tx_wait_has_op_ = !payload.empty();
+  this->tx_wait_op_ = payload.empty() ? 0 : payload[0];
+  this->tx_wait_ = true;
+
+  bool sent = this->tx_frame_(initiator, dest, payload);
+  if (sent) {
+    // Wait for the RX task to decode our self-capture (~8 ms after the frame
+    // ends). 40 ms is comfortable headroom on a quiet bus.
+    for (int i = 0; i < 8 && !this->tx_seen_; i++)
+      vTaskDelay(pdMS_TO_TICKS(5));
+  }
+  this->tx_wait_ = false;
+  if (acked != nullptr)
+    *acked = this->tx_seen_ && this->tx_acked_;
+  return sent;
 }
 
 bool HdmiCec::tx_frame_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload) {
@@ -673,13 +702,13 @@ void HdmiCec::decode_capture_(const rmt_symbol_word_t *syms, size_t n) {
     // On a broadcast the meaning is inverted — low means "rejected".
     bool acked = (dest == 0xF) ? !last_ack_low : last_ack_low;
 
-    // Address negotiation: if this is the self-capture of our own polling
-    // message (header only, initiator == dest == probed address), record
-    // whether anybody acknowledged it and wake negotiate_address_().
-    if (this->probe_addr_ >= 0 && num_bytes == 1 && initiator == (uint8_t) this->probe_addr_ &&
-        dest == (uint8_t) this->probe_addr_) {
-      this->probe_acked_ = acked;
-      this->probe_seen_ = true;
+    // Self-capture ACK detection: if this is the frame tx_and_confirm_() is
+    // waiting on (same header, and same opcode when it has one), record its
+    // acknowledgement so the sender can decide whether to retransmit.
+    if (this->tx_wait_ && bytes[0] == this->tx_wait_header_ &&
+        (!this->tx_wait_has_op_ || (num_bytes > 1 && bytes[1] == this->tx_wait_op_))) {
+      this->tx_acked_ = acked;
+      this->tx_seen_ = true;
     }
 
     ESP_LOGI(TAG, "CEC frame [%s] initiator=%u destination=%u eom=%d ack=%s", hex, initiator, dest, last_eom,
@@ -774,9 +803,9 @@ void HdmiCec::dump_config() {
                 this->last_arm_err_ == ESP_OK ? "OK" : "ERROR", (int) this->last_arm_err_);
   ESP_LOGCONFIG(TAG, "  TX channel: %s, receiver ACK: %s", this->tx_channel_ != nullptr ? "ready" : "MISSING",
                 this->ack_timer_ != nullptr ? "active" : "MISSING");
-  ESP_LOGCONFIG(TAG, "  Raw captures: %u, frames decoded: %u, sent: %u, ACKs sent: %u, errors: %u",
+  ESP_LOGCONFIG(TAG, "  Raw captures: %u, frames decoded: %u, sent: %u, retransmits: %u, ACKs sent: %u, errors: %u",
                 (unsigned) this->raw_events_, (unsigned) this->frames_decoded_, (unsigned) this->frames_sent_,
-                (unsigned) this->acks_sent_, (unsigned) this->decode_errors_);
+                (unsigned) this->retransmits_, (unsigned) this->acks_sent_, (unsigned) this->decode_errors_);
 }
 
 uint8_t HdmiCec::address_of(const std::string &name) const {

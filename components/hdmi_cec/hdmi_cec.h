@@ -229,9 +229,14 @@ class HdmiCec : public Component {
   // Send a header-only polling message to `addr` and return true if some device
   // acknowledged it — i.e. the address is already taken. Blocks briefly.
   bool poll_address_(uint8_t addr);
-  // Raw transmit shared by send_from() and poll_address_(); unlike send_from()
+  // Raw transmit shared by send_from() and tx_and_confirm_(); unlike send_from()
   // it accepts an empty payload (a header-only polling message).
   bool tx_frame_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload);
+  // Transmit one frame and wait (~40 ms) for its self-capture to be decoded,
+  // reporting the acknowledgement. Returns whether the frame was actually sent
+  // (false if the bus was busy). Shared by send_from()'s retry loop and address
+  // negotiation.
+  bool tx_and_confirm_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload, bool *acked);
 
   // Dedicated task: re-arms the capture (<1 ms) and decodes. loop() was too
   // slow (period up to 16 ms): the single reply from a follower we acknowledged
@@ -293,17 +298,22 @@ class HdmiCec : public Component {
 
   rmt_symbol_word_t tx_symbols_[TX_SYMBOL_CAPACITY];
 
-  // Address-probe handoff: negotiate_address_() sets probe_addr_ and waits;
-  // decode_capture_() records the acknowledgement of the matching self-capture.
-  volatile int8_t probe_addr_{-1};
-  volatile bool probe_seen_{false};
-  volatile bool probe_acked_{false};
+  // Self-capture ACK handoff: tx_and_confirm_() arms the wait for the frame it
+  // just sent (matched by header, and opcode when present); decode_capture_()
+  // records the acknowledgement of the matching self-capture.
+  volatile bool tx_wait_{false};
+  volatile bool tx_seen_{false};
+  volatile bool tx_acked_{false};
+  uint8_t tx_wait_header_{0};
+  uint8_t tx_wait_op_{0};
+  bool tx_wait_has_op_{false};
 
   // Diagnostic counters
   uint32_t frames_decoded_{0};
   uint32_t decode_errors_{0};
   volatile uint32_t raw_events_{0};  // completed RMT captures (incremented in the ISR)
   uint32_t frames_sent_{0};
+  uint32_t retransmits_{0};  // frames re-sent after a NACK
   bool dma_used_{false};
   bool negotiated_{false};  // true if address_ came from negotiation, not an override
   esp_err_t last_arm_err_{ESP_OK};
