@@ -6,10 +6,10 @@ An [ESPHome](https://esphome.io) external component that drives an **HDMI-CEC** 
 
 ## Why this component
 
-The reference CEC component for ESPHome, [Palakis/esphome-native-hdmi-cec](https://github.com/Palakis/esphome-native-hdmi-cec), bit-bangs the bus from an ISR using busy-waits of roughly 1.5 ms. That has two consequences:
+The CEC bus has strict bit timing — a data bit lasts about 2.4 ms and must be sampled within a fraction of that. The usual way to meet it on an ESP is to bit-bang the line from an interrupt, busy-waiting through each bit for roughly 1.5 ms with a core held under an interrupt lock. That has two costs:
 
-- **It does not work on the ESP32-S3** (or C3): it crashes at boot, with the added trap that OTA reports "successful" while the device has silently rolled back to the previous image. Only ESP32 classic, ESP8266 and RP2040 are supported.
-- **It is hostile to real-time work**: holding a core for 1.5 ms under an interrupt lock breaks an audio pipeline.
+- **It breaks on modern ESP32s.** On the ESP32-S3 (and C3) a busy-wait of that length at boot crashes the device — with the added trap that OTA reports "successful" while the board has silently rolled back to the previous image.
+- **It is hostile to real-time work.** Holding a core for 1.5 ms under an interrupt lock is enough to break an audio pipeline.
 
 This component hands timing to the hardware instead. Reception uses RMT capture with DMA, transmission uses the RMT encoder, and the ISR does nothing but push the capture onto a queue. The result runs on an ESP32-S3 that simultaneously decodes a 48 kHz FLAC stream to an SPDIF output, with no dropouts.
 
@@ -105,14 +105,9 @@ The component implements a minimum viable subset of the protocol. What is missin
 - **Portability unverified.** The receiver ACK manipulates GPIO registers directly (`GPIO.func_out_sel_cfg`). The code should work on other ESP32 variants, but only the S3 has been tested.
 - **Occasional decode errors.** The counter sometimes shows a rejected frame on an otherwise quiet bus. The cause has not been established.
 
-## A warning about real devices
+## A note on real devices
 
-CEC is a protocol many devices implement poorly. Observed while developing this component, on a **Yamaha RX-V375** (2013):
-
-- Powering it on over CEC **reproducibly crashes its audio section**. It keeps answering the bus normally and shows the correct input signal, but no sound comes out, and only a mains power cycle recovers it. Powered on by hand, it works perfectly — including CEC volume control.
-- The input-selection command (`User Control` `0x6A`) is acknowledged but has no effect.
-
-Neither behaviour is caused by this component. They illustrate that CEC control must be validated device by device, and that an acknowledgement does not mean a command was carried out.
+CEC is implemented unevenly across devices, and an acknowledgement on the bus means a frame was *received*, not that the command took effect. Validate control device by device.
 
 ## License
 
