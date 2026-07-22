@@ -39,7 +39,13 @@ class HdmiCecSelect : public select::Select, public PollingComponent {
     if (active == PHYSICAL_ADDRESS_NONE) return;
     for (const auto &option : this->options_) {
       if (option.second == active) {
-        if (!this->has_state() || this->state != option.first) this->publish_state(option.first);
+        // Track our own last value: select::Select does not expose `state`
+        // publicly across ESPHome versions.
+        if (!this->published_ || this->last_ != option.first) {
+          this->published_ = true;
+          this->last_ = option.first;
+          this->publish_state(option.first);
+        }
         return;
       }
     }
@@ -62,6 +68,8 @@ class HdmiCecSelect : public select::Select, public PollingComponent {
   uint8_t address_{0xFF};
   std::string device_name_;
   std::vector<std::pair<std::string, uint16_t>> options_;
+  bool published_{false};
+  std::string last_;
 };
 
 }  // namespace hdmi_cec

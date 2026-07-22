@@ -37,6 +37,8 @@ jobs:
             ~/.espressif
           key: platformio-${{ runner.os }}
       - name: Install ESPHome
-        run: pip install "esphome==2026.3.2"
+        # Intentionally unpinned: the build must track the current ESPHome
+        # release so a breaking API change surfaces here, not on users' devices.
+        run: pip install esphome
       - name: Compile the test configuration
         run: esphome compile tests/test-esp32-s3-idf.yaml

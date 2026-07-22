@@ -33,7 +33,11 @@ class HdmiCecSwitch : public switch_::Switch, public PollingComponent {
     PowerState power = this->parent_->power_of(this->address_);
     if (power == POWER_UNKNOWN) return;
     bool on = (power == POWER_ON);
-    if (on != this->state) this->publish_state(on);
+    if (!this->published_ || this->last_ != on) {
+      this->published_ = true;
+      this->last_ = on;
+      this->publish_state(on);
+    }
   }
 
  protected:
@@ -46,6 +50,8 @@ class HdmiCecSwitch : public switch_::Switch, public PollingComponent {
   HdmiCec *parent_{nullptr};
   uint8_t address_{0xFF};
   std::string device_name_;
+  bool published_{false};
+  bool last_{false};
 };
 
 }  // namespace hdmi_cec

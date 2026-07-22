@@ -515,12 +515,13 @@ async def _apply_action_address(var, which, value, args):
 
 
 async def _templatable_bytes(value, args):
-    if isinstance(value, Lambda):
-        return await cg.templatable(value, args, cg.std_vector.template(cg.uint8))
-    # A static list: build an explicitly typed vector so the templated setter can
-    # deduce its argument (a bare brace-init list cannot be deduced).
-    body = ", ".join(f"0x{b:02X}" for b in value)
-    return cg.RawExpression(f"std::vector<uint8_t>{{{body}}}")
+    # Must go through cg.templatable (recent ESPHome asserts on TEMPLATABLE_VALUE
+    # fields otherwise). For a static list, wrap an explicitly typed vector so the
+    # templated setter can still deduce its argument on older ESPHome too.
+    if not isinstance(value, Lambda):
+        body = ", ".join(f"0x{b:02X}" for b in value)
+        value = cg.RawExpression(f"std::vector<uint8_t>{{{body}}}")
+    return await cg.templatable(value, args, cg.std_vector.template(cg.uint8))
 
 
 @automation.register_action("hdmi_cec.transmit", TransmitAction, TRANSMIT_SCHEMA)
@@ -622,7 +623,7 @@ async def volume_to_code(config, action_id, template_arg, args):
     parent = await cg.get_variable(config[CONF_ID])
     var = cg.new_Pvariable(action_id, template_arg, parent)
     await _apply_device(var, config[CONF_DEVICE], args)
-    cg.add(var.set_key(config[CONF_ACTION]))  # already a User Control Code
+    cg.add(var.set_key(await cg.templatable(config[CONF_ACTION], args, cg.uint8)))
     return var
 
 
