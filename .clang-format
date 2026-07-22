@@ -1,0 +1,8 @@
+---
+BasedOnStyle: Google
+AlignConsecutiveMacros: 'true'
+ColumnLimit: 120
+DerivePointerAlignment: 'false'
+PointerAlignment: Right
+Standard: c++11
+---

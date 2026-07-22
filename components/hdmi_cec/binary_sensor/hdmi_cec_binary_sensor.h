@@ -1,12 +1,11 @@
 #pragma once
 
-#include "esphome/components/binary_sensor/binary_sensor.h"
-#include "esphome/core/component.h"
-#include "esphome/core/log.h"
-
 #include <string>
 
 #include "../hdmi_cec.h"
+#include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/core/component.h"
+#include "esphome/core/log.h"
 
 namespace esphome {
 namespace hdmi_cec {
@@ -35,12 +34,10 @@ class HdmiCecBinarySensor : public binary_sensor::BinarySensor, public PollingCo
   }
 
   void update() override {
-    if (this->address_ == 0xFF)
-      return;
+    if (this->address_ == 0xFF) return;
     bool value = (this->type_ == HDMI_CEC_BINARY_MUTE) ? this->parent_->mute_of(this->address_)
                                                        : (this->parent_->power_of(this->address_) == POWER_ON);
-    if (!this->has_state() || this->state != value)
-      this->publish_state(value);
+    if (!this->has_state() || this->state != value) this->publish_state(value);
   }
 
  protected:

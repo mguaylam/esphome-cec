@@ -1,12 +1,11 @@
 #pragma once
 
-#include "esphome/components/switch/switch.h"
-#include "esphome/core/component.h"
-#include "esphome/core/log.h"
-
 #include <string>
 
 #include "../hdmi_cec.h"
+#include "esphome/components/switch/switch.h"
+#include "esphome/core/component.h"
+#include "esphome/core/log.h"
 
 namespace esphome {
 namespace hdmi_cec {
@@ -30,20 +29,17 @@ class HdmiCecSwitch : public switch_::Switch, public PollingComponent {
   }
 
   void update() override {
-    if (this->address_ == 0xFF)
-      return;
+    if (this->address_ == 0xFF) return;
     PowerState power = this->parent_->power_of(this->address_);
-    if (power == POWER_UNKNOWN)
-      return;
+    if (power == POWER_UNKNOWN) return;
     bool on = (power == POWER_ON);
-    if (on != this->state)
-      this->publish_state(on);
+    if (on != this->state) this->publish_state(on);
   }
 
  protected:
   void write_state(bool state) override {
     if (this->address_ != 0xFF)
-      this->parent_->send(this->address_, {state ? (uint8_t) 0x04 : (uint8_t) 0x36});  // Image View On / Standby
+      this->parent_->send(this->address_, {state ? (uint8_t)0x04 : (uint8_t)0x36});  // Image View On / Standby
     this->publish_state(state);  // optimistic; reconciled by update()
   }
 

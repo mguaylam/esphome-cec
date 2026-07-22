@@ -10,10 +10,18 @@ DEPENDENCIES = ["hdmi_cec"]
 HdmiCecSensor = hdmi_cec_ns.class_("HdmiCecSensor", sensor.Sensor, cg.PollingComponent)
 
 CONFIG_SCHEMA = (
-    sensor.sensor_schema(HdmiCecSensor, unit_of_measurement=UNIT_PERCENT, accuracy_decimals=0)
+    sensor.sensor_schema(
+        HdmiCecSensor, unit_of_measurement=UNIT_PERCENT, accuracy_decimals=0
+    )
     .extend(ENTITY_BASE_SCHEMA)
     .extend(cv.polling_component_schema("1s"))
-    .extend({cv.Optional(CONF_TYPE, default="audio_volume"): cv.one_of("audio_volume", lower=True)})
+    .extend(
+        {
+            cv.Optional(CONF_TYPE, default="audio_volume"): cv.one_of(
+                "audio_volume", lower=True
+            )
+        }
+    )
 )
 
 

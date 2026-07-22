@@ -1,14 +1,13 @@
 #pragma once
 
-#include "esphome/components/select/select.h"
-#include "esphome/core/component.h"
-#include "esphome/core/log.h"
-
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "../hdmi_cec.h"
+#include "esphome/components/select/select.h"
+#include "esphome/core/component.h"
+#include "esphome/core/log.h"
 
 namespace esphome {
 namespace hdmi_cec {
@@ -37,12 +36,10 @@ class HdmiCecSelect : public select::Select, public PollingComponent {
 
   void update() override {
     uint16_t active = this->parent_->current_active_source();
-    if (active == PHYSICAL_ADDRESS_NONE)
-      return;
+    if (active == PHYSICAL_ADDRESS_NONE) return;
     for (const auto &option : this->options_) {
       if (option.second == active) {
-        if (!this->has_state() || this->state != option.first)
-          this->publish_state(option.first);
+        if (!this->has_state() || this->state != option.first) this->publish_state(option.first);
         return;
       }
     }
@@ -54,8 +51,7 @@ class HdmiCecSelect : public select::Select, public PollingComponent {
       if (option.first == value) {
         uint16_t pa = option.second;
         // Set Stream Path (broadcast): ask the switch to route this address.
-        this->parent_->send_from(this->parent_->address(), 0x0F,
-                                 {0x86, (uint8_t) (pa >> 8), (uint8_t) (pa & 0xFF)});
+        this->parent_->send_from(this->parent_->address(), 0x0F, {0x86, (uint8_t)(pa >> 8), (uint8_t)(pa & 0xFF)});
         this->publish_state(value);  // optimistic; reconciled by update()
         return;
       }
