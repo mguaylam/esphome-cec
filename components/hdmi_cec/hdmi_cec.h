@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace esphome {
@@ -61,6 +62,23 @@ struct DecodedFrame {
 struct NamedDevice {
   std::string name;
   uint8_t address;
+};
+
+enum PowerState : uint8_t {
+  POWER_UNKNOWN = 0,
+  POWER_ON,
+  POWER_STANDBY,
+};
+
+// Live state tracked for a device on the bus, kept current by the registry
+// (passive decode + active polling). Consumed by the higher layers.
+struct DeviceState {
+  PowerState power{POWER_UNKNOWN};
+  uint8_t volume{0xFF};  // 0-100; only meaningful when volume_known
+  bool mute{false};
+  bool volume_known{false};
+  uint16_t active_source{PHYSICAL_ADDRESS_NONE};  // physical address it announced
+  std::string osd_name;
 };
 
 // A decoded CEC frame, exposed to `on_frame` lambdas as `frame`.
@@ -127,6 +145,38 @@ class HdmiCec : public Component {
   // or a named device — to a logical address. Returns 0xF for an unknown token.
   uint8_t resolve_address(const std::string &token) const;
 
+  // ── Device-state registry accessors (for the higher layers) ──────────────
+  // Each comes in an address form and a device-name form.
+  PowerState power_of(uint8_t addr) const { return this->states_[addr & 0x0F].power; }
+  uint8_t volume_of(uint8_t addr) const {
+    const DeviceState &s = this->states_[addr & 0x0F];
+    return s.volume_known ? s.volume : 0xFF;
+  }
+  bool mute_of(uint8_t addr) const { return this->states_[addr & 0x0F].mute; }
+  uint16_t active_source_of(uint8_t addr) const { return this->states_[addr & 0x0F].active_source; }
+  std::string osd_name_of(uint8_t addr) const { return this->states_[addr & 0x0F].osd_name; }
+
+  PowerState power_of(const std::string &name) const {
+    uint8_t a = this->address_of(name);
+    return a == 0xFF ? POWER_UNKNOWN : this->power_of(a);
+  }
+  uint8_t volume_of(const std::string &name) const {
+    uint8_t a = this->address_of(name);
+    return a == 0xFF ? 0xFF : this->volume_of(a);
+  }
+  bool mute_of(const std::string &name) const {
+    uint8_t a = this->address_of(name);
+    return a == 0xFF ? false : this->mute_of(a);
+  }
+  uint16_t active_source_of(const std::string &name) const {
+    uint8_t a = this->address_of(name);
+    return a == 0xFF ? PHYSICAL_ADDRESS_NONE : this->active_source_of(a);
+  }
+  std::string osd_name_of(const std::string &name) const {
+    uint8_t a = this->address_of(name);
+    return a == 0xFF ? std::string() : this->osd_name_of(a);
+  }
+
   // Called from the RMT driver's ISR callback.
   bool on_recv_done(const rmt_rx_done_event_data_t *edata);
 
@@ -135,6 +185,11 @@ class HdmiCec : public Component {
   void decode_capture_(const rmt_symbol_word_t *syms, size_t n);
   void setup_tx_();
   void setup_ack_();
+
+  // Device-state registry: passive parse of one decoded frame, plus one
+  // rate-limited active poll step (round-robin over the tracked devices).
+  void update_registry_(const Frame &frame);
+  void poll_registry_();
 
   // Logical-address negotiation: probe the device type's pool and claim the
   // first free address. Falls back to unregistered (listen-only) if the whole
@@ -180,6 +235,16 @@ class HdmiCec : public Component {
   QueueHandle_t frame_queue_{nullptr};
   std::function<void(uint8_t, uint8_t, const std::vector<uint8_t> &)> frame_handler_{};
   std::vector<HdmiCecFrameTrigger *> frame_triggers_;
+
+  // ── Device-state registry ──
+  DeviceState states_[16];                                 // indexed by logical address
+  std::vector<std::pair<uint8_t, uint8_t>> poll_targets_;  // (address, query opcode)
+  size_t poll_index_{0};
+  uint32_t last_poll_ms_{0};
+  bool poll_in_flight_{false};
+  uint32_t poll_sent_ms_{0};
+  uint8_t poll_wait_addr_{0};
+  uint8_t poll_wait_opcode_{0};
 
   // Double buffer: the RX task re-arms reception on the other buffer while it
   // decodes the one that just filled up.
