@@ -1,8 +1,8 @@
 # esphome-cec
 
-An [ESPHome](https://esphome.io) external component that drives an **HDMI-CEC** bus using the ESP32 **RMT** peripheral.
+An [ESPHome](https://esphome.io) external component that drives an **HDMI-CEC** bus using the ESP32 **RMT** peripheral, with a full YAML API — triggers, actions and Home Assistant entities, no C++ required.
 
-> **Status: experimental.** It works and runs in production on an ESP32-S3, but the API is not yet idiomatic ESPHome (it requires C++) and several parts of the CEC protocol are unimplemented. See [ROADMAP.md](ROADMAP.md) and the limitations below.
+> **Status: experimental but functional.** Runs in production on an ESP32-S3. Most of the CEC protocol is implemented (address negotiation, receiver ACK, retransmission, standard-query responses, a device-state model). Collision arbitration and non-S3 targets are still open — see [ROADMAP.md](ROADMAP.md) and the limitations below.
 
 ## Why this component
 
@@ -24,84 +24,181 @@ The CEC bus is a single open-drain wire, pulled high by the connected devices.
 
 A plain HDMI breakout board is enough. No additional components are required: the bus is already pulled high by the other devices, and the ESP32 only ever pulls it low.
 
-**Tested on**: ESP32-S3 (N16R8), ESP-IDF 5.5, ESPHome 2026.7. Other ESP32 variants are unverified — see limitations.
+**Tested on**: ESP32-S3 (N16R8), ESP-IDF 5.5, recent ESPHome. Other ESP32 variants are unverified — see limitations.
 
-## Usage
+## Installation
 
 ```yaml
 external_components:
   - source:
       type: git
       url: https://github.com/mguaylam/esphome-cec
-    components: [hdmi_cec_rmt]
+    components: [hdmi_cec]
+```
 
-hdmi_cec_rmt:
+The component requires the **ESP-IDF** framework (not Arduino) and an ESP32 with the new RMT driver.
+
+## The hub
+
+```yaml
+hdmi_cec:
   id: cec_bus
-  pin: 4
+  pin: GPIO4
+
+  device_type: playback     # tv | recorder | tuner | playback | audio_system | switch
+  osd_name: "ESPHome"       # advertised on Give OSD Name (<= 14 chars)
+  physical_address: none    # none (default) | 0x1000 — see the note below
+  vendor_id: 0x000000       # optional; advertised on Give Device Vendor ID
+
+  auto_respond: true        # answer standard queries by itself (OSD name, power, version…)
+  monitor_mode: false       # never drive the line, listen only
+  promiscuous_mode: false   # fire on_frame for messages not addressed to us
+  retransmit: 5             # attempts on a NACK (0 = fire and forget)
+  update_interval: 30s      # how often the device-state registry actively polls
+
+  # Give the addresses on your bus readable names, usable everywhere below.
+  devices:
+    tv: 0x0
+    avr: 0x5
+    apple_tv: 0x4
 ```
 
-The API is currently **C++ only**, driven from a lambda. Receiving:
+The logical address is **negotiated at startup**: the component probes its
+`device_type`'s address pool and claims the first free one. Set `address:`
+explicitly to skip negotiation.
+
+`physical_address` cannot be read from a bare CEC wire (it needs EDID over DDC),
+so it defaults to `none` — the component advertises nothing. Set it manually if
+you know your device's position in the HDMI topology; an incorrect one can
+confuse other devices, so `none` is the safe default.
+
+## Entities
+
+The platforms expose a tracked device's state to Home Assistant and let you
+control it, with no lambdas.
 
 ```yaml
-esphome:
-  on_boot:
-    - lambda: |-
-        id(cec_bus)->set_frame_handler(
-          [](uint8_t initiator, uint8_t destination, const std::vector<uint8_t> &data) {
-            if (data.empty()) return;
-            uint8_t opcode = data[0];
-            // Report Audio Status from an amplifier (logical address 5)
-            if (initiator == 0x5 && opcode == 0x7A && data.size() >= 2) {
-              bool mute = (data[1] & 0x80) != 0;
-              uint8_t volume = data[1] & 0x7F;
-              ESP_LOGI("cec", "volume=%u mute=%d", volume, mute);
-            }
-          });
+sensor:
+  - platform: hdmi_cec
+    name: "AVR volume"
+    device: avr
+    type: audio_volume        # 0-100
+
+binary_sensor:
+  - platform: hdmi_cec
+    name: "AVR muted"
+    device: avr
+    type: mute                # mute | power
+
+text_sensor:
+  - platform: hdmi_cec
+    name: "TV name"
+    device: tv
+    type: osd_name            # osd_name | power_state
+
+switch:
+  - platform: hdmi_cec
+    name: "TV power"
+    device: tv                # ON → One Touch Play, OFF → Standby
+
+select:
+  - platform: hdmi_cec
+    name: "AVR input"
+    device: avr
+    options:                  # label → physical address; selecting routes it
+      "Apple TV": 0x4000
+      "Blu-ray":  0x2000
 ```
 
-Sending — `send(destination, payload)`, where the payload starts with the opcode:
+`device` accepts a name from `devices:` or a raw logical address.
+
+## Automations
+
+### Semantic triggers
+
+React to decoded events without touching opcodes:
 
 ```yaml
-button:
-  - platform: template
-    name: "Amp volume up"
-    on_press:
-      - lambda: 'id(cec_bus)->send(5, {0x44, 0x41});'   # User Control Pressed
-      - delay: 100ms
-      - lambda: 'id(cec_bus)->send(5, {0x45});'          # User Control Released
+hdmi_cec:
+  on_volume:
+    - then:
+        - logger.log:
+            format: "volume=%u mute=%d from %u"
+            args: ["volume", "mute", "source"]
+  on_key_press:
+    - then:
+        - logger.log:
+            format: "key %s from %u"
+            args: ["key.c_str()", "source"]
 ```
 
-`send_from(initiator, destination, payload)` sends on behalf of another logical address, which is useful for probing a device that only answers the TV.
+Available: `on_key_press`, `on_key_release`, `on_standby`, `on_active_source`,
+`on_volume`, `on_power`.
 
-The component's logical address is **hard-coded to `0x8`** (Playback 2) in `hdmi_cec_rmt.h`; making it configurable is task 2 on the roadmap.
+### Semantic actions
+
+```yaml
+on_press:
+  - hdmi_cec.power_on:  { device: tv }
+  - hdmi_cec.standby:   { device: tv }       # omit device → broadcast
+  - hdmi_cec.volume:    { device: avr, action: up }   # up | down | mute
+  - hdmi_cec.key_press: { device: avr, key: play }    # any CEC user-control key
+  - hdmi_cec.active_source: {}               # announce ourselves (needs physical_address)
+```
+
+### Low-level escape hatch
+
+For anything the higher layers don't cover, the low-level layer speaks in named
+opcodes and a structured `frame` object — never magic bytes, and the whole
+protocol stays reachable.
+
+```yaml
+hdmi_cec:
+  on_frame:
+    - opcode: report_audio_status   # a name, or a raw byte like 0x7A
+      from: avr                     # name | number | us | broadcast | any
+      then:
+        - logger.log:
+            format: "audio status: 0x%02X"
+            args: ["frame.params[0]"]
+
+on_press:
+  # Structured: named opcode + params, or a raw byte string.
+  - hdmi_cec.transmit: { to: avr, opcode: user_control_pressed, params: [0x41] }
+  - hdmi_cec.transmit: { to: broadcast, raw: [0x36] }
+```
 
 ## Diagnostics
 
-`dump_config()` reports hardware state and cumulative counters:
+`dump_config()` reports the resolved configuration and cumulative counters:
 
 ```
-HDMI-CEC RMT:
-  Pin: GPIO4, logical address: 8
+HDMI-CEC:
+  Pin: GPIO4
+  Device type: playback
+  Logical address: 0x4 (negotiated)
+  Physical address: none (advertising nothing)
+  OSD name: 'ESPHome'
+  auto_respond: yes, promiscuous: no, retransmit: 5, poll: 30s
+  Tracked devices:
+    tv (0x0): power=on
+    avr (0x5): power=on volume=42 mute=0
   RX channel: created, DMA: yes, last arm: OK (0)
   TX channel: ready, receiver ACK: active
-  Raw captures: 13, frames decoded: 13, sent: 7, ACKs sent: 18, errors: 1
+  Raw captures: 41, frames decoded: 41, sent: 12, retransmits: 1, ACKs sent: 26, errors: 0
 ```
 
 Every decoded frame is logged with its contents, addresses and acknowledgement result:
 
 ```
-CEC frame [85:44:41] initiator=8 destination=5 eom=1 ack=yes
-CEC frame [58:7A:33] initiator=5 destination=8 eom=1 ack=yes
+CEC frame [45:44:41] initiator=4 destination=5 eom=1 ack=yes
+CEC frame [54:7A:33] initiator=5 destination=4 eom=1 ack=yes
 ```
 
 ## Known limitations
 
-The component implements a minimum viable subset of the protocol. What is missing:
-
-- **No collision arbitration.** CEC requires monitoring the line bit by bit while transmitting the header and backing off if another device is talking. This component only checks that the bus looks idle before it starts.
-- **No retransmission.** The specification calls for up to five attempts when a frame is not acknowledged. Here, a lost frame stays lost.
-- **No address negotiation.** The logical address is fixed at compile time, with no polling to confirm it is free. The physical address is not read from EDID, so the component cannot place itself correctly in the HDMI topology.
-- **No Feature Abort.** Unhandled opcodes are silently ignored. That is deliberate — replying to everything floods the bus — but it is not compliant.
+- **No collision arbitration.** CEC requires monitoring the line bit by bit while transmitting the header and backing off if another device is talking. This component only checks that the bus looks idle before it starts, then relies on retransmission to recover from a collision.
+- **Physical address is not auto-discovered.** Reading it needs EDID over DDC, which a bare CEC-wire connection cannot do. Supply it manually or leave it unset.
 - **Portability unverified.** The receiver ACK manipulates GPIO registers directly (`GPIO.func_out_sel_cfg`). The code should work on other ESP32 variants, but only the S3 has been tested.
 - **Occasional decode errors.** The counter sometimes shows a rejected frame on an otherwise quiet bus. The cause has not been established.
 
