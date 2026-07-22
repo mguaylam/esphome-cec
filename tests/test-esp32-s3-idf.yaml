@@ -1,0 +1,36 @@
+# Compile test for the hdmi_cec component (Layer 0 hub + Layer 1 named devices).
+# Exercises the full configuration surface with no C++ lambda.
+esphome:
+  name: hdmi-cec-test
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      # The receiver ACK starts and stops a gptimer from ISR context.
+      CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM: "y"
+
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [hdmi_cec]
+
+hdmi_cec:
+  id: cec_bus
+  pin: GPIO4
+  device_type: playback
+  osd_name: "ESPHome CEC"
+  physical_address: none
+  auto_respond: true
+  monitor_mode: false
+  promiscuous_mode: false
+  retransmit: 5
+  update_interval: 30s
+  devices:
+    tv: 0x0
+    avr: 0x5
+    apple_tv: 0x4
