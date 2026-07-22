@@ -468,14 +468,37 @@ void HdmiCec::arm_receive_(rmt_symbol_word_t *buffer) {
 }
 
 void HdmiCec::loop() {
-  // Dispatch decoded frames to the user handler from the main loop, the only
-  // safe place to publish to ESPHome entities.
+  // Dispatch decoded frames from the main loop, the only safe place to publish
+  // to ESPHome entities and run automations.
   DecodedFrame f;
   for (int i = 0; i < 4 && this->frame_queue_ != nullptr && xQueueReceive(this->frame_queue_, &f, 0) == pdTRUE; i++) {
-    if (!this->frame_handler_ || f.len == 0)
+    if (f.len == 0)
       continue;
-    std::vector<uint8_t> data(f.bytes + 1, f.bytes + f.len);
-    this->frame_handler_((uint8_t) (f.bytes[0] >> 4), (uint8_t) (f.bytes[0] & 0x0F), data);
+
+    Frame frame;
+    frame.from = (uint8_t) (f.bytes[0] >> 4);
+    frame.to = (uint8_t) (f.bytes[0] & 0x0F);
+    frame.is_broadcast = (frame.to == 0x0F);
+    frame.opcode = 0;
+    if (f.len > 1) {
+      frame.opcode = f.bytes[1];
+      frame.data.assign(f.bytes + 1, f.bytes + f.len);
+      if (f.len > 2)
+        frame.params.assign(f.bytes + 2, f.bytes + f.len);
+    }
+
+    // Legacy internal handler (set_frame_handler): sees every decoded frame,
+    // with `data` being the payload after the header (including the opcode).
+    if (this->frame_handler_)
+      this->frame_handler_(frame.from, frame.to, frame.data);
+
+    // on_frame triggers. Unless promiscuous, only frames addressed to us (or
+    // broadcast) reach them.
+    bool for_us = frame.is_broadcast || frame.to == this->address_;
+    if (this->promiscuous_mode_ || for_us) {
+      for (auto *trigger : this->frame_triggers_)
+        trigger->process(frame);
+    }
   }
 }
 
@@ -621,6 +644,18 @@ uint8_t HdmiCec::address_of(const std::string &name) const {
     if (d.name == name)
       return d.address;
   return 0xFF;
+}
+
+uint8_t HdmiCec::resolve_address(const std::string &token) const {
+  if (token == "us")
+    return this->address_;
+  if (token == "broadcast")
+    return 0x0F;
+  uint8_t named = this->address_of(token);
+  if (named != 0xFF)
+    return named;
+  ESP_LOGW(TAG, "Unknown address '%s', falling back to broadcast", token.c_str());
+  return 0x0F;
 }
 
 }  // namespace hdmi_cec

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 
 #include <driver/gptimer.h>
@@ -62,6 +63,18 @@ struct NamedDevice {
   uint8_t address;
 };
 
+// A decoded CEC frame, exposed to `on_frame` lambdas as `frame`.
+struct Frame {
+  uint8_t from;                 // initiator logical address
+  uint8_t to;                   // destination logical address (0xF = broadcast)
+  uint8_t opcode;               // 0 for a header-only polling message (data empty)
+  std::vector<uint8_t> params;  // payload after the opcode
+  std::vector<uint8_t> data;    // full payload, including the opcode
+  bool is_broadcast;
+};
+
+class HdmiCecFrameTrigger;
+
 class HdmiCec : public Component {
  public:
   // ── Configuration (set from __init__.py) ─────────────────────────────────
@@ -107,6 +120,12 @@ class HdmiCec : public Component {
   void set_frame_handler(std::function<void(uint8_t, uint8_t, const std::vector<uint8_t> &)> h) {
     this->frame_handler_ = std::move(h);
   }
+
+  // Register an `on_frame` trigger (called from generated code).
+  void register_frame_trigger(HdmiCecFrameTrigger *trigger) { this->frame_triggers_.push_back(trigger); }
+  // Resolve a config address token — "us" (our negotiated address), "broadcast",
+  // or a named device — to a logical address. Returns 0xF for an unknown token.
+  uint8_t resolve_address(const std::string &token) const;
 
   // Called from the RMT driver's ISR callback.
   bool on_recv_done(const rmt_rx_done_event_data_t *edata);
@@ -160,6 +179,7 @@ class HdmiCec : public Component {
   QueueHandle_t rx_queue_{nullptr};
   QueueHandle_t frame_queue_{nullptr};
   std::function<void(uint8_t, uint8_t, const std::vector<uint8_t> &)> frame_handler_{};
+  std::vector<HdmiCecFrameTrigger *> frame_triggers_;
 
   // Double buffer: the RX task re-arms reception on the other buffer while it
   // decodes the one that just filled up.
@@ -196,6 +216,100 @@ class HdmiCec : public Component {
   volatile uint8_t bit_idx_{0};  // 0-8 = data + EOM received, 9 = ACK slot next
   volatile uint16_t cur_block_{0};
   volatile uint32_t acks_sent_{0};
+};
+
+// on_frame: fires for every decoded frame that passes the C++ filters. Filter
+// values follow this convention: -1 = any (no filter), -2 = "us" (our own
+// address, resolved at runtime because it is negotiated), 0..15 = a literal
+// logical address (0xF = broadcast).
+class HdmiCecFrameTrigger : public Trigger<Frame> {
+ public:
+  explicit HdmiCecFrameTrigger(HdmiCec *parent) : parent_(parent) { parent->register_frame_trigger(this); }
+  void set_opcode(int16_t opcode) { this->opcode_ = opcode; }
+  void set_from(int16_t addr) { this->from_ = addr; }
+  void set_to(int16_t addr) { this->to_ = addr; }
+
+  void process(const Frame &frame) {
+    if (this->opcode_ >= 0 && (frame.data.empty() || frame.opcode != (uint8_t) this->opcode_))
+      return;
+    if (this->from_ != -1) {
+      uint8_t want = (this->from_ == -2) ? this->parent_->address() : (uint8_t) this->from_;
+      if (frame.from != want)
+        return;
+    }
+    if (this->to_ != -1) {
+      uint8_t want = (this->to_ == -2) ? this->parent_->address() : (uint8_t) this->to_;
+      if (frame.to != want)
+        return;
+    }
+    this->trigger(frame);
+  }
+
+ protected:
+  HdmiCec *parent_;
+  int16_t opcode_{-1};
+  int16_t from_{-1};
+  int16_t to_{-1};
+};
+
+// hdmi_cec.transmit: structured (opcode [+ params]) or raw. Addresses given as a
+// name/"us"/"broadcast" are resolved at runtime via a token; numbers and lambdas
+// go through the templatable value.
+template<typename... Ts> class TransmitAction : public Action<Ts...> {
+ public:
+  explicit TransmitAction(HdmiCec *parent) : parent_(parent) {}
+  TEMPLATABLE_VALUE(uint8_t, to)
+  TEMPLATABLE_VALUE(uint8_t, source)
+  TEMPLATABLE_VALUE(uint8_t, opcode)
+  TEMPLATABLE_VALUE(std::vector<uint8_t>, params)
+  TEMPLATABLE_VALUE(std::vector<uint8_t>, raw)
+
+  void set_to_token(const std::string &token) {
+    this->to_token_ = token;
+    this->has_to_token_ = true;
+  }
+  void set_from_token(const std::string &token) {
+    this->from_token_ = token;
+    this->has_from_token_ = true;
+  }
+  void set_has_source(bool value) { this->has_source_ = value; }
+  void set_has_opcode(bool value) { this->has_opcode_ = value; }
+  void set_has_params(bool value) { this->has_params_ = value; }
+  void set_has_raw(bool value) { this->has_raw_ = value; }
+
+  void play(Ts... x) override {
+    uint8_t to = this->has_to_token_ ? this->parent_->resolve_address(this->to_token_) : this->to_.value(x...);
+    uint8_t from;
+    if (this->has_from_token_)
+      from = this->parent_->resolve_address(this->from_token_);
+    else if (this->has_source_)
+      from = this->source_.value(x...);
+    else
+      from = this->parent_->address();
+
+    std::vector<uint8_t> payload;
+    if (this->has_raw_) {
+      payload = this->raw_.value(x...);
+    } else {
+      payload.push_back(this->opcode_.value(x...));
+      if (this->has_params_) {
+        std::vector<uint8_t> p = this->params_.value(x...);
+        payload.insert(payload.end(), p.begin(), p.end());
+      }
+    }
+    this->parent_->send_from(from, to, payload);
+  }
+
+ protected:
+  HdmiCec *parent_;
+  std::string to_token_;
+  std::string from_token_;
+  bool has_to_token_{false};
+  bool has_from_token_{false};
+  bool has_source_{false};
+  bool has_opcode_{false};
+  bool has_params_{false};
+  bool has_raw_{false};
 };
 
 }  // namespace hdmi_cec
