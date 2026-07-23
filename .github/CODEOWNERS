@@ -1,0 +1,3 @@
+# Every change is owned by the maintainer, matching the component's
+# CODEOWNERS declaration in components/hdmi_cec/__init__.py.
+* @mguaylam

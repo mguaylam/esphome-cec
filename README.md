@@ -1,8 +1,12 @@
 # esphome-cec
 
+[![CI](https://github.com/mguaylam/esphome-cec/actions/workflows/ci.yml/badge.svg)](https://github.com/mguaylam/esphome-cec/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/mguaylam/esphome-cec)](LICENSE)
+[![ESPHome](https://img.shields.io/badge/ESPHome-external%20component-black?logo=esphome&logoColor=white)](https://esphome.io)
+
 An [ESPHome](https://esphome.io) external component that drives an **HDMI-CEC** bus using the ESP32 **RMT** peripheral, with a full YAML API — triggers, actions and Home Assistant entities, no C++ required.
 
-> **Status: experimental but functional.** Runs in production on an ESP32-S3. Most of the CEC protocol is implemented (address negotiation, receiver ACK, retransmission, standard-query responses, a device-state model). Collision arbitration and non-S3 targets are still open — see [ROADMAP.md](ROADMAP.md) and the limitations below.
+> **Status: experimental but functional.** Runs in production on an ESP32-S3. The CEC protocol is implemented end to end: address negotiation, receiver ACK, asynchronous transmission with collision arbitration, retransmission with context-aware signal free time, standard-query responses and a device-state model. Non-S3 targets are the main open item — see [ROADMAP.md](ROADMAP.md) and the limitations below.
 
 ## Why this component
 
@@ -11,7 +15,7 @@ The CEC bus has strict bit timing — a data bit lasts about 2.4 ms and must be 
 - **It breaks on modern ESP32s.** On the ESP32-S3 (and C3) a busy-wait of that length at boot crashes the device — with the added trap that OTA reports "successful" while the board has silently rolled back to the previous image.
 - **It is hostile to real-time work.** Holding a core for 1.5 ms under an interrupt lock is enough to break an audio pipeline.
 
-This component hands timing to the hardware instead. Reception uses RMT capture with DMA, transmission uses the RMT encoder, and the ISR does nothing but push the capture onto a queue. The result runs on an ESP32-S3 that simultaneously decodes a 48 kHz FLAC stream to an SPDIF output, with no dropouts.
+This component hands timing to the hardware instead. Reception uses RMT capture with DMA, and the ISR does nothing but push the capture onto a queue. Transmission is driven bit by bit from a hardware timer ISR that never holds the core, sampling the line inline for collision arbitration and the acknowledgement. The result runs on an ESP32-S3 that simultaneously decodes a 48 kHz FLAC stream to an SPDIF output, with no dropouts.
 
 ## Hardware
 
@@ -199,7 +203,7 @@ CEC frame [54:7A:33] initiator=5 destination=4 eom=1 ack=yes
 
 - **Physical address is not auto-discovered.** Reading it needs EDID over DDC, which a bare CEC-wire connection cannot do. Supply it manually or leave it unset.
 - **Portability unverified.** The receiver ACK manipulates GPIO registers directly (`GPIO.func_out_sel_cfg`). The code should work on other ESP32 variants, but only the S3 has been tested.
-- **Occasional decode errors.** The counter sometimes shows a rejected frame on an otherwise quiet bus. The cause has not been established.
+- **Rare spurious decode errors.** On a busy bus around 1-2 % of captures register an out-of-range pulse at a frame boundary (a symbol-merge artefact). The partial capture is discarded and reception re-syncs on the next frame — no valid frame is lost. The `dump_config` counter tracks them.
 
 ## A note on real devices
 
