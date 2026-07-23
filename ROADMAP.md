@@ -30,9 +30,14 @@ remains.
 
 ### Protocol
 
-- **Physical address discovery.** Reading it needs EDID over DDC, which a bare
-  CEC-wire connection cannot do. Either wire up DDC and read it, or keep
-  accepting a user-supplied value (current behaviour).
+- **`physical_address: auto` via DDC/EDID.** The physical address is what an
+  Active Source announcement needs to route audio to an amplifier — a bare
+  CEC-wire connection cannot read it, so today it must be supplied by hand (and
+  an invented value is the safe-but-imperfect fallback). The fix: wire the HDMI
+  DDC lines (SCL pin 15, SDA pin 16, +5 V pin 18, ground) to the ESP32's I²C,
+  read the sink's EDID (I²C address 0x50), parse its HDMI VSDB for the a.b.c.d
+  physical address, and self-configure. This is the piece that makes audio
+  routing reliable without guessing an address.
 
 ### Portability
 
