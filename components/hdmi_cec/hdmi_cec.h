@@ -222,7 +222,7 @@ class HdmiCec : public Component {
   // auto_respond housekeeping: answer standard queries directed at us, and
   // Feature Abort anything else directly addressed and unhandled.
   void handle_housekeeping_(const Frame &frame);
-  void feature_abort_(uint8_t initiator, uint8_t opcode);
+  void feature_abort_(uint8_t initiator, uint8_t opcode, uint8_t reason = 0x00);
 
   // Logical-address negotiation: probe the device type's pool and claim the
   // first free address. Falls back to unregistered (listen-only) if the whole
@@ -241,6 +241,7 @@ class HdmiCec : public Component {
   void pump_tx_();
   void start_tx_current_(const uint8_t *blocks, uint8_t num_blocks);
   bool bus_free_() const;
+  bool bus_idle_for_(uint32_t ms) const;
   // Blocking transmit used only at boot (address negotiation), where the main
   // loop is not yet running. Returns whether the frame was acknowledged.
   bool transmit_sync_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload, bool *acked);
@@ -342,7 +343,8 @@ class HdmiCec : public Component {
   bool dma_used_{false};
   bool negotiated_{false};  // true if address_ came from negotiation, not an override
   esp_err_t last_arm_err_{ESP_OK};
-  uint32_t last_rx_ms_{0};  // last bus activity seen by the RX task
+  uint32_t last_rx_ms_{0};                        // last bus activity seen by the RX task
+  uint8_t last_initiator_{ADDRESS_UNREGISTERED};  // initiator of the last frame, for signal-free-time
 
   // ── Receiver ACK — state touched from the ISR only ──
   gptimer_handle_t ack_timer_{nullptr};
