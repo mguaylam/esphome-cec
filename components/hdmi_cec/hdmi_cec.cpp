@@ -938,7 +938,11 @@ void HdmiCec::decode_capture_(const rmt_symbol_word_t *syms, size_t n) {
     } else if (low_us >= ZERO_LOW_MIN && low_us <= ZERO_LOW_MAX) {
       bit = false;
     } else {
-      this->decode_errors_++;
+      // A pulse longer than any valid start bit is a frame-boundary or
+      // symbol-merge artefact, not a corrupt bit: re-sync without counting it.
+      // Anything else in this gap (a genuinely out-of-spec pulse mid-frame) is a
+      // real decode error.
+      if (low_us <= START_LOW_MAX) this->decode_errors_++;
       in_frame = false;
       flush_frame();
       continue;
