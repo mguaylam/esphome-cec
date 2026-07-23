@@ -13,8 +13,13 @@ remains.
   (`sensor`, `binary_sensor`, `text_sensor`, `switch`, `select`).
 - **Logical-address negotiation.** Probes the device type's address pool at
   startup and claims the first free one.
-- **Retransmission on NACK.** Up to `retransmit` attempts, acknowledgement
-  detected from the self-capture.
+- **Asynchronous transmission with collision arbitration.** The line is driven
+  bit by bit from a gptimer ISR (never holding the core); the header is sampled
+  for arbitration and yielded the instant a lower address wins, and the ACK slot
+  is read inline. `send_from()` enqueues and returns immediately.
+- **Retransmission on NACK.** Up to `retransmit` attempts, acknowledgement read
+  from the ACK slot; collisions and NACKs retried with an address-weighted
+  back-off.
 - **Standard-query responses (`auto_respond`).** Answers Give OSD Name, Give
   Device Power Status, Get CEC Version, Give Physical Address and Give Device
   Vendor ID, and Feature Aborts anything else directly addressed.
@@ -25,12 +30,6 @@ remains.
 
 ### Protocol
 
-- **Collision arbitration.** CEC is multi-master: while transmitting the header
-  a device must sample the line and back off if it reads a level it did not
-  drive. Today we only check that the bus looks idle before starting, and lean
-  on retransmission to recover. The RX channel already hears our own
-  transmissions (`io_loop_back`), so the raw material is there; the work is
-  comparing the captured header against what was sent, early enough to stop.
 - **Physical address discovery.** Reading it needs EDID over DDC, which a bare
   CEC-wire connection cannot do. Either wire up DDC and read it, or keep
   accepting a user-supplied value (current behaviour).

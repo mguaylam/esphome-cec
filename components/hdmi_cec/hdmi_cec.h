@@ -41,7 +41,7 @@ static constexpr uint8_t ADDRESS_AUTO = 0xFF;
 // A CEC frame is at most 16 blocks of 10 bits plus the start bit
 // → ~161 low/high pairs. 192 symbols leaves comfortable headroom.
 static constexpr size_t RX_SYMBOL_CAPACITY = 192;
-static constexpr size_t TX_SYMBOL_CAPACITY = 176;  // start + 16 blocks × 10 bits
+static constexpr size_t TX_SEQ_CAPACITY = 1 + 16 * 10;  // start bit + 16 blocks × 10 bits
 
 // Reference to a completed capture, posted from the RMT callback (ISR) to the
 // RX task. The symbols stay in the buffer pointed to by `symbols` (double
@@ -229,16 +229,22 @@ class HdmiCec : public Component {
   // pool is taken or TX is unavailable.
   void negotiate_address_();
   // Send a header-only polling message to `addr` and return true if some device
-  // acknowledged it — i.e. the address is already taken. Blocks briefly.
+  // acknowledged it — i.e. the address is already taken. Blocks briefly (boot only).
   bool poll_address_(uint8_t addr);
-  // Raw transmit shared by send_from() and tx_and_confirm_(); unlike send_from()
-  // it accepts an empty payload (a header-only polling message).
-  bool tx_frame_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload);
-  // Transmit one frame and wait (~40 ms) for its self-capture to be decoded,
-  // reporting the acknowledgement. Returns whether the frame was actually sent
-  // (false if the bus was busy). Shared by send_from()'s retry loop and address
-  // negotiation.
-  bool tx_and_confirm_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload, bool *acked);
+
+  // ── gptimer-driven asynchronous transmitter ──────────────────────────────
+  // The line is driven bit by bit from a gptimer ISR (the receiver-ACK pattern):
+  // the core is never held, arbitration is sampled during the header, and the
+  // ACK slot is read inline. send_from() enqueues and returns; pump_tx_() (from
+  // loop) starts the next frame when the bus is free and handles retransmission.
+  bool enqueue_tx_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload);
+  void pump_tx_();
+  void start_tx_current_(const uint8_t *blocks, uint8_t num_blocks);
+  bool bus_free_() const;
+  // Blocking transmit used only at boot (address negotiation), where the main
+  // loop is not yet running. Returns whether the frame was acknowledged.
+  bool transmit_sync_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload, bool *acked);
+  static bool tx_timer_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *arg);
 
   // Dedicated task: re-arms the capture (<1 ms) and decodes. loop() was too
   // slow (period up to 16 ms): the single reply from a follower we acknowledged
@@ -298,17 +304,34 @@ class HdmiCec : public Component {
   alignas(64) rmt_symbol_word_t rx_buffers_[2][RX_SYMBOL_CAPACITY];
   volatile uint8_t next_buffer_{0};
 
-  rmt_symbol_word_t tx_symbols_[TX_SYMBOL_CAPACITY];
+  // ── gptimer transmitter state ──
+  // One CEC bit driven as a low pulse then a release, both bit-dependent.
+  struct TxBit {
+    uint16_t low_us;
+    uint16_t high_us;
+    bool arbitrate;  // header "1" bit: yield if the line reads back low
+    bool ack_slot;   // read the follower's acknowledgement here
+  };
+  struct TxJob {
+    uint8_t blocks[16];
+    uint8_t num_blocks;
+    uint8_t attempts;
+  };
+  gptimer_handle_t tx_timer_{nullptr};
+  TxJob tx_queue_[8];
+  uint8_t tx_q_head_{0};
+  uint8_t tx_q_tail_{0};
+  uint32_t tx_backoff_until_{0};
 
-  // Self-capture ACK handoff: tx_and_confirm_() arms the wait for the frame it
-  // just sent (matched by header, and opcode when present); decode_capture_()
-  // records the acknowledgement of the matching self-capture.
-  volatile bool tx_wait_{false};
-  volatile bool tx_seen_{false};
-  volatile bool tx_acked_{false};
-  uint8_t tx_wait_header_{0};
-  uint8_t tx_wait_op_{0};
-  bool tx_wait_has_op_{false};
+  TxBit tx_seq_[TX_SEQ_CAPACITY];  // bit sequence of the frame currently on the wire
+  volatile uint16_t tx_len_{0};
+  volatile uint16_t tx_idx_{0};
+  volatile uint8_t tx_phase_{0};
+  volatile bool tx_active_{false};
+  volatile bool tx_done_{true};
+  volatile bool tx_arb_lost_{false};
+  volatile bool tx_ack_low_{false};
+  bool tx_in_flight_{false};  // a job at the queue head is on the wire
 
   // Diagnostic counters
   uint32_t frames_decoded_{0};

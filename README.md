@@ -197,7 +197,6 @@ CEC frame [54:7A:33] initiator=5 destination=4 eom=1 ack=yes
 
 ## Known limitations
 
-- **No collision arbitration.** CEC requires monitoring the line bit by bit while transmitting the header and backing off if another device is talking. This component only checks that the bus looks idle before it starts, then relies on retransmission to recover from a collision.
 - **Physical address is not auto-discovered.** Reading it needs EDID over DDC, which a bare CEC-wire connection cannot do. Supply it manually or leave it unset.
 - **Portability unverified.** The receiver ACK manipulates GPIO registers directly (`GPIO.func_out_sel_cfg`). The code should work on other ESP32 variants, but only the S3 has been tested.
 - **Occasional decode errors.** The counter sometimes shows a rejected frame on an otherwise quiet bus. The cause has not been established.
