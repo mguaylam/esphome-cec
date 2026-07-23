@@ -33,6 +33,13 @@ static constexpr uint32_t TX_ONE_LOW = 600, TX_ONE_HIGH = 1800;      // 2.4 ms t
 // after the 600 µs low), used for arbitration and reading the ACK slot.
 static constexpr uint32_t TX_SAMPLE_DELAY = 450;
 
+// Signal free time required before transmitting, in nominal 2.4 ms bit periods
+// (rounded up to whole ms): 3 for a retransmission, 5 for a new initiator, 7 to
+// send again as the initiator that just transmitted — so others get a turn.
+static constexpr uint32_t SFT_RETRANSMIT_MS = 8;  // 3 × 2.4 ms
+static constexpr uint32_t SFT_NEW_MS = 12;        // 5 × 2.4 ms
+static constexpr uint32_t SFT_PRESENT_MS = 17;    // 7 × 2.4 ms
+
 // Logical-address pools per device type, in negotiation order. Indexed by the
 // DeviceType enum value.
 struct AddressPool {
@@ -583,11 +590,14 @@ void HdmiCec::setup_tx_() {
   gptimer_enable(this->tx_timer_);
 }
 
-bool HdmiCec::bus_free_() const {
-  // Line released (high) and no bus activity for >10 ms (a capture closes 8 ms
-  // after the last frame; the spec asks a new initiator to wait >= 5 bit periods).
-  return gpio_get_level(static_cast<gpio_num_t>(this->pin_)) != 0 && (millis() - this->last_rx_ms_) >= 10;
+bool HdmiCec::bus_idle_for_(uint32_t ms) const {
+  // Line released (high) and no bus activity for at least `ms`.
+  return gpio_get_level(static_cast<gpio_num_t>(this->pin_)) != 0 && (millis() - this->last_rx_ms_) >= ms;
 }
+
+// Default free time: a new initiator (5 bit periods). Used by the boot-time
+// negotiation path; pump_tx_ picks the context-specific time itself.
+bool HdmiCec::bus_free_() const { return this->bus_idle_for_(SFT_NEW_MS); }
 
 bool HdmiCec::enqueue_tx_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload) {
   if (this->tx_timer_ == nullptr) {
@@ -752,8 +762,9 @@ void HdmiCec::pump_tx_() {
     if (retry && job.attempts + 1 < this->retransmit_) {
       job.attempts++;
       this->retransmits_++;
-      // Back off before retrying; a lower address waits less (soft arbitration).
-      this->tx_backoff_until_ = now + 45 + (uint32_t)this->address_ * 3;
+      // Soft-arbitration spread only; the signal-free-time floor is enforced
+      // below, so a lower address gets back on the bus first.
+      this->tx_backoff_until_ = now + (uint32_t)this->address_ * 2;
       if (this->tx_arb_lost_) ESP_LOGD(TAG, "Lost arbitration to %u, will retry", (unsigned)dest);
     } else {
       if (retry) ESP_LOGW(TAG, "Frame to %u gave up after %u attempts", (unsigned)dest, (unsigned)(job.attempts + 1));
@@ -765,8 +776,13 @@ void HdmiCec::pump_tx_() {
 
   if (this->tx_q_head_ == this->tx_q_tail_) return;  // queue empty
   if (now < this->tx_backoff_until_) return;
-  if (!this->bus_free_()) return;
   TxJob &job = this->tx_queue_[this->tx_q_head_];
+  // Signal free time by context: a retransmission waits the least; the initiator
+  // that just transmitted waits the most before speaking again.
+  uint32_t needed = (job.attempts > 0)                          ? SFT_RETRANSMIT_MS
+                    : (this->last_initiator_ == this->address_) ? SFT_PRESENT_MS
+                                                                : SFT_NEW_MS;
+  if (!this->bus_idle_for_(needed)) return;
   this->tx_in_flight_ = true;
   this->start_tx_current_(job.blocks, job.num_blocks);
 }
@@ -821,6 +837,17 @@ void HdmiCec::loop() {
       frame.data.assign(f.bytes + 1, f.bytes + f.len);
       if (f.len > 2) frame.params.assign(f.bytes + 2, f.bytes + f.len);
     }
+
+    // Malformed: a real frame never has initiator == destination — only a
+    // header-only polling ping does, and it carries no data. Drop the rest.
+    if (frame.from == frame.to && !frame.data.empty()) {
+      this->decode_errors_++;
+      continue;
+    }
+
+    // Remember who transmitted last (including our own self-captured frames),
+    // for the signal-free-time choice on the next send.
+    this->last_initiator_ = frame.from;
 
     // Registry and semantic triggers snoop every frame, regardless of addressing.
     this->update_registry_(frame);
@@ -996,6 +1023,11 @@ uint8_t HdmiCec::resolve_address(const std::string &token) const {
 void HdmiCec::update_registry_(const Frame &frame) {
   DeviceState &st = this->states_[frame.from & 0x0F];
   switch (frame.opcode) {
+    case 0x00:  // Feature Abort — a device rejected a command (often one of ours)
+      if (frame.params.size() >= 2 && frame.to == this->address_)
+        ESP_LOGD(TAG, "device 0x%X aborted opcode 0x%02X (reason %u)", (unsigned)frame.from, (unsigned)frame.params[0],
+                 (unsigned)frame.params[1]);
+      break;
     case 0x90:  // Report Power Status
       if (!frame.params.empty()) {
         // 0x00 = on, 0x01 = standby, 0x02 = transitioning to on, 0x03 = to standby.
@@ -1072,9 +1104,10 @@ void HdmiCec::poll_registry_() {
 // ground between silence and flooding the bus — but a response (see
 // is_response_opcode) never does: the spec forbids aborting one.
 
-void HdmiCec::feature_abort_(uint8_t initiator, uint8_t opcode) {
-  // [Feature Abort][original opcode][reason: 0x00 = Unrecognized opcode].
-  this->send(initiator, {0x00, opcode, 0x00});
+void HdmiCec::feature_abort_(uint8_t initiator, uint8_t opcode, uint8_t reason) {
+  // [Feature Abort][original opcode][reason]. 0x00 = Unrecognized opcode,
+  // 0x04 = Refused (the mandated answer to <Abort>).
+  this->send(initiator, {0x00, opcode, reason});
 }
 
 // Opcodes that are responses, status reports or a Feature Abort itself: a device
@@ -1138,8 +1171,10 @@ void HdmiCec::handle_housekeeping_(const Frame &frame) {
       break;
     default:  // directly addressed, unhandled, not a broadcast
       // Only genuinely unrecognized initiating commands earn a Feature Abort —
-      // never a response we solicited, nor a Feature Abort itself.
-      if (!is_response_opcode(frame.opcode)) this->feature_abort_(initiator, frame.opcode);
+      // never a response we solicited, nor a Feature Abort itself. <Abort>
+      // (0xFF) is answered "Refused"; the rest, "Unrecognized opcode".
+      if (!is_response_opcode(frame.opcode))
+        this->feature_abort_(initiator, frame.opcode, frame.opcode == 0xFF ? 0x04 : 0x00);
       break;
   }
 }
