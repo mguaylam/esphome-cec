@@ -19,28 +19,109 @@ This component hands timing to the hardware instead. Reception uses RMT capture 
 
 ## Hardware
 
-The CEC bus is a single open-drain wire, pulled high by the connected devices.
+The CEC bus is a single open-drain wire (HDMI pin 13), pulled high by the
+connected devices. The ESP32 only ever pulls it low, so **no extra components
+are needed** — no resistor, no level shifter. Tap the wire on any spare HDMI
+port of the TV or AV receiver: CEC is shared across all of a device's ports.
 
-| HDMI pin | Signal | Connect to |
+### Bill of materials
+
+| Part | Why | ~Price | Where |
+|---|---|---|---|
+| ESP32-S3 DevKitC-1 (N16R8) | the MCU — RMT peripheral + PSRAM | ~$8 | [AliExpress](https://www.aliexpress.com/wholesale?SearchText=ESP32-S3-DevKitC-1+N16R8) |
+| HDMI male breakout board (19-pin) | plugs into a spare HDMI port, exposes the pins | ~$2 | [AliExpress](https://www.aliexpress.com/wholesale?SearchText=HDMI+male+breakout+board+19+pin) |
+| Female–female jumper wires | GPIO/GND → breakout | ~$1 | [AliExpress](https://www.aliexpress.com/wholesale?SearchText=dupont+female+jumper+wires) |
+
+A female HDMI breakout plus a male-to-male cable works too, if you prefer an
+inline tap. Any ESP32 with the new RMT driver should work, but only the S3 is
+tested — see [Known limitations](#known-limitations).
+
+### Pinout & wiring
+
+Only two of the connector's pins matter for CEC:
+
+| HDMI pin | Signal | ESP32 |
 |---|---|---|
-| 13 | CEC | any GPIO on the ESP32 |
-| 17 | DDC/CEC ground | ESP32 GND |
+| 13 | CEC | any GPIO (e.g. GPIO4) |
+| 17 | DDC/CEC ground | GND |
 
-A plain HDMI breakout board is enough. No additional components are required: the bus is already pulled high by the other devices, and the ESP32 only ever pulls it low.
-
-**Tested on**: ESP32-S3 (N16R8), ESP-IDF 5.5, recent ESPHome. Other ESP32 variants are unverified — see limitations.
-
-## Installation
-
-```yaml
-external_components:
-  - source:
-      type: git
-      url: https://github.com/mguaylam/esphome-cec
-    components: [hdmi_cec]
+```
+       ESP32-S3                          HDMI breakout plug
+     ┌───────────┐                     ┌──────────────────┐
+     │      GPIO4├─────────────────────┤ pin 13  CEC      │
+     │       GND ├─────────────────────┤ pin 17  ground   │
+     └───────────┘                     └────────┬─────────┘
+                                                │
+                                                ▼  any spare HDMI
+                                                   port on TV / AVR
 ```
 
-The component requires the **ESP-IDF** framework (not Arduino) and an ESP32 with the new RMT driver.
+> Pins 15 (SCL), 16 (SDA) and 18 (+5 V) carry the DDC/EDID lines. They are only
+> needed for the future `physical_address: auto` feature (see [ROADMAP.md](ROADMAP.md));
+> a plain CEC hook-up leaves them unconnected.
+
+**Tested on**: ESP32-S3 (N16R8), ESP-IDF 5.5, recent ESPHome.
+
+## Step by step
+
+From parts to a working CEC controller:
+
+1. **Wire it.** ESP32 GPIO → HDMI pin 13, GND → pin 17 (see [Pinout & wiring](#pinout--wiring)),
+   then plug the breakout into a spare HDMI port on the TV or AV receiver.
+
+2. **Pull in the component.** Add it to your ESPHome YAML:
+
+   ```yaml
+   external_components:
+     - source:
+         type: git
+         url: https://github.com/mguaylam/esphome-cec
+       components: [hdmi_cec]
+   ```
+
+   It requires the **ESP-IDF** framework (not Arduino) and an ESP32 with the new
+   RMT driver.
+
+3. **Configure the bus.** A minimal hub:
+
+   ```yaml
+   esp32:
+     board: esp32-s3-devkitc-1
+     framework:
+       type: esp-idf
+
+   hdmi_cec:
+     pin: GPIO4
+     device_type: playback
+     devices:
+       tv: 0x0
+       avr: 0x5
+   ```
+
+4. **Flash it.**
+
+   ```bash
+   esphome run your-config.yaml
+   ```
+
+5. **Verify.** The logs show the negotiated address and live bus traffic:
+
+   ```
+   CEC on GPIO4, address 8 (RX armed, TX ready, ACK active)
+   CEC frame [45:44:41] initiator=4 destination=5 eom=1 ack=yes
+   ```
+
+6. **Control something.** Turn the AVR volume up:
+
+   ```yaml
+   button:
+     - platform: template
+       name: "AVR volume up"
+       on_press:
+         - hdmi_cec.volume: { device: avr, action: up }
+   ```
+
+The full API — hub options, entities, triggers and actions — follows.
 
 ## The hub
 
