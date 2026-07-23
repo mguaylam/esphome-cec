@@ -1067,13 +1067,35 @@ void HdmiCec::poll_registry_() {
 // ── auto_respond housekeeping ────────────────────────────────────────────────
 // Answer the standard queries every device is expected to handle, so the user
 // never wires them by hand. Only for frames directly addressed to us (never a
-// broadcast), never in monitor mode, never our own self-captures. Anything else
-// directly addressed and unhandled gets a Feature Abort — the compliant middle
-// ground between silence and flooding the bus.
+// broadcast), never in monitor mode, never our own self-captures. An unhandled
+// directly-addressed *command* gets a Feature Abort — the compliant middle
+// ground between silence and flooding the bus — but a response (see
+// is_response_opcode) never does: the spec forbids aborting one.
 
 void HdmiCec::feature_abort_(uint8_t initiator, uint8_t opcode) {
   // [Feature Abort][original opcode][reason: 0x00 = Unrecognized opcode].
   this->send(initiator, {0x00, opcode, 0x00});
+}
+
+// Opcodes that are responses, status reports or a Feature Abort itself: a device
+// may send these directly to us — usually answering a query we made — and the
+// spec forbids Feature-Aborting a response. The registry and semantic layers
+// consume the ones that carry state; here they are simply never aborted.
+static bool is_response_opcode(uint8_t opcode) {
+  switch (opcode) {
+    case 0x00:  // Feature Abort
+    case 0x47:  // Set OSD Name
+    case 0x9E:  // CEC Version
+    case 0x90:  // Report Power Status
+    case 0x7A:  // Report Audio Status
+    case 0x72:  // Set System Audio Mode
+    case 0x7E:  // System Audio Mode Status
+    case 0x9A:  // Report Short Audio Descriptor
+    case 0x9D:  // Inactive Source
+      return true;
+    default:
+      return false;
+  }
 }
 
 void HdmiCec::handle_housekeeping_(const Frame &frame) {
@@ -1115,7 +1137,9 @@ void HdmiCec::handle_housekeeping_(const Frame &frame) {
       }
       break;
     default:  // directly addressed, unhandled, not a broadcast
-      this->feature_abort_(initiator, frame.opcode);
+      // Only genuinely unrecognized initiating commands earn a Feature Abort —
+      // never a response we solicited, nor a Feature Abort itself.
+      if (!is_response_opcode(frame.opcode)) this->feature_abort_(initiator, frame.opcode);
       break;
   }
 }
