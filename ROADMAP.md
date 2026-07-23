@@ -45,14 +45,6 @@ remains.
   receiver ACK writes GPIO registers directly; if layouts diverge, hide the
   difference behind `hal/gpio_ll.h` rather than `#ifdef` blocks.
 
-### Quality
-
-- `clang-format` (Google style, 120 columns) and `ruff`/`black` config, run
-  across the tree.
-- Expand `tests/` and add a GitHub Actions workflow that compiles the test
-  configuration on every push.
-- Investigate the occasional decode error reported on a quiet bus.
-
 ### Upstream (optional)
 
 - A documentation PR against `esphome-docs`, a `CODEOWNERS` maintenance
