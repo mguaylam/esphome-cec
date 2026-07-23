@@ -29,6 +29,9 @@ static constexpr uint32_t ONE_LOW_MAX = 950;
 static constexpr uint32_t TX_START_LOW = 3700, TX_START_HIGH = 800;  // 4.5 ms total
 static constexpr uint32_t TX_ZERO_LOW = 1500, TX_ZERO_HIGH = 900;    // 2.4 ms total
 static constexpr uint32_t TX_ONE_LOW = 600, TX_ONE_HIGH = 1800;      // 2.4 ms total
+// Sample point after releasing a "1" bit (~1.05 ms from the bit start = 450 µs
+// after the 600 µs low), used for arbitration and reading the ACK slot.
+static constexpr uint32_t TX_SAMPLE_DELAY = 450;
 
 // Logical-address pools per device type, in negotiation order. Indexed by the
 // DeviceType enum value.
@@ -401,7 +404,7 @@ bool HdmiCec::poll_address_(uint8_t addr) {
   // means another device owns the address.
   for (int attempt = 0; attempt < 3; attempt++) {
     bool acked = false;
-    if (this->tx_and_confirm_(addr, addr, {}, &acked))  // header-only polling message
+    if (this->transmit_sync_(addr, addr, {}, &acked))  // header-only polling message
       return acked;
     vTaskDelay(pdMS_TO_TICKS(20));  // bus busy: back off and retry
   }
@@ -525,9 +528,10 @@ void HdmiCec::setup_ack_() {
 }
 
 void HdmiCec::setup_tx_() {
-  // Same GPIO as RX: open drain plus io_loop_back, following the 1-wire bus
-  // pattern from the IDF examples. A "1" releases the line (the bus pull-up
-  // takes over), a "0" pulls it to ground — we never fight other transmitters.
+  // The RMT TX channel is kept only to configure the pad (open drain + loop-back)
+  // and to hold the released idle baseline. The actual transmission is bit-banged
+  // from the gptimer ISR (start_tx_current_), driving the pad by GPIO exactly like
+  // the receiver ACK — so the core is never held and we can sample the line.
   rmt_tx_channel_config_t cfg = {};
   cfg.gpio_num = static_cast<gpio_num_t>(this->pin_);
   cfg.clk_src = RMT_CLK_SRC_DEFAULT;
@@ -560,57 +564,33 @@ void HdmiCec::setup_tx_() {
   txc.flags.eot_level = 1;
   rmt_transmit(this->tx_channel_, this->tx_encoder_, &release, sizeof(release), &txc);
   rmt_tx_wait_all_done(this->tx_channel_, 10);
+
+  // The bit-level transmit timer (1 µs resolution), driven from its ISR callback.
+  // Requires CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM=y (alarm reconfigured from the ISR).
+  gptimer_config_t tcfg = {};
+  tcfg.clk_src = GPTIMER_CLK_SRC_DEFAULT;
+  tcfg.direction = GPTIMER_COUNT_UP;
+  tcfg.resolution_hz = 1 * 1000 * 1000;
+  err = gptimer_new_timer(&tcfg, &this->tx_timer_);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "TX gptimer unavailable (%d): transmission disabled", (int)err);
+    this->tx_timer_ = nullptr;
+    return;
+  }
+  gptimer_event_callbacks_t tcbs = {};
+  tcbs.on_alarm = tx_timer_cb;
+  gptimer_register_event_callbacks(this->tx_timer_, &tcbs, this);
+  gptimer_enable(this->tx_timer_);
 }
 
-bool HdmiCec::send_from(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload) {
-  if (payload.empty()) {
-    ESP_LOGW(TAG, "Empty payload rejected (a polling message is an internal operation, not send())");
-    return false;
-  }
-
-  // retransmit == 0: fire and forget, no wait for the acknowledgement.
-  if (this->retransmit_ == 0) return this->tx_frame_(initiator, dest, payload);
-
-  // Otherwise up to `retransmit` attempts, stopping as soon as the frame is
-  // acknowledged. A broadcast is reported acknowledged unless a follower
-  // rejected it, so it normally succeeds on the first attempt.
-  for (uint8_t attempt = 0; attempt < this->retransmit_; attempt++) {
-    bool acked = false;
-    if (!this->tx_and_confirm_(initiator, dest, payload, &acked)) {
-      vTaskDelay(pdMS_TO_TICKS(20));  // bus busy: back off and retry
-      continue;
-    }
-    if (acked) return true;
-    if (attempt + 1 < this->retransmit_) {
-      this->retransmits_++;
-      vTaskDelay(pdMS_TO_TICKS(45));  // mandated inter-attempt spacing
-    }
-  }
-  ESP_LOGW(TAG, "Frame to %u not acknowledged after %u attempts", (unsigned)dest, (unsigned)this->retransmit_);
-  return false;
+bool HdmiCec::bus_free_() const {
+  // Line released (high) and no bus activity for >10 ms (a capture closes 8 ms
+  // after the last frame; the spec asks a new initiator to wait >= 5 bit periods).
+  return gpio_get_level(static_cast<gpio_num_t>(this->pin_)) != 0 && (millis() - this->last_rx_ms_) >= 10;
 }
 
-bool HdmiCec::tx_and_confirm_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload, bool *acked) {
-  this->tx_seen_ = false;
-  this->tx_acked_ = false;
-  this->tx_wait_header_ = (uint8_t)(((initiator & 0x0F) << 4) | (dest & 0x0F));
-  this->tx_wait_has_op_ = !payload.empty();
-  this->tx_wait_op_ = payload.empty() ? 0 : payload[0];
-  this->tx_wait_ = true;
-
-  bool sent = this->tx_frame_(initiator, dest, payload);
-  if (sent) {
-    // Wait for the RX task to decode our self-capture (~8 ms after the frame
-    // ends). 40 ms is comfortable headroom on a quiet bus.
-    for (int i = 0; i < 8 && !this->tx_seen_; i++) vTaskDelay(pdMS_TO_TICKS(5));
-  }
-  this->tx_wait_ = false;
-  if (acked != nullptr) *acked = this->tx_seen_ && this->tx_acked_;
-  return sent;
-}
-
-bool HdmiCec::tx_frame_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload) {
-  if (this->tx_channel_ == nullptr) {
+bool HdmiCec::enqueue_tx_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload) {
+  if (this->tx_timer_ == nullptr) {
     ESP_LOGW(TAG, "TX unavailable");
     return false;
   }
@@ -622,60 +602,191 @@ bool HdmiCec::tx_frame_(uint8_t initiator, uint8_t dest, const std::vector<uint8
     ESP_LOGW(TAG, "Invalid payload (%u bytes)", (unsigned)payload.size());
     return false;
   }
-
-  // Is the bus free? Line high plus radio silence. A capture closes 8 ms after
-  // the last frame, so >10 ms since then means >18 ms after the last bit; the
-  // spec asks a new initiator to wait at least 5 bit periods, i.e. 12 ms.
-  // NOTE: this is not arbitration. Two devices starting at the same instant
-  // will still collide — see ROADMAP.md, task 2.1.
-  if (gpio_get_level(static_cast<gpio_num_t>(this->pin_)) == 0 || (millis() - this->last_rx_ms_) < 10) {
-    ESP_LOGW(TAG, "Bus busy, transmission cancelled (retry)");
+  uint8_t next = (uint8_t)((this->tx_q_tail_ + 1) % 8);
+  if (next == this->tx_q_head_) {
+    ESP_LOGW(TAG, "TX queue full, frame to %u dropped", (unsigned)dest);
     return false;
   }
+  TxJob &job = this->tx_queue_[this->tx_q_tail_];
+  job.num_blocks = 0;
+  job.blocks[job.num_blocks++] = (uint8_t)(((initiator & 0x0F) << 4) | (dest & 0x0F));
+  for (uint8_t b : payload) job.blocks[job.num_blocks++] = b;
+  job.attempts = 0;
+  this->tx_q_tail_ = next;
+  return true;
+}
 
-  uint8_t blocks[15];
-  size_t num_blocks = 0;
-  blocks[num_blocks++] = (uint8_t)(((initiator & 0x0F) << 4) | (dest & 0x0F));
-  for (uint8_t b : payload) blocks[num_blocks++] = b;
+bool HdmiCec::send_from(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload) {
+  if (payload.empty()) {
+    ESP_LOGW(TAG, "Empty payload rejected (a polling message is an internal operation, not send())");
+    return false;
+  }
+  return this->enqueue_tx_(initiator, dest, payload);
+}
 
+// Build the bit sequence for a frame and start the gptimer state machine. The
+// core is free until each timer alarm fires. Arbitration is sampled on the
+// header's released bits; the ACK slot of each block is read inline.
+void HdmiCec::start_tx_current_(const uint8_t *blocks, uint8_t num_blocks) {
   size_t n = 0;
-  this->tx_symbols_[n].level0 = 0;
-  this->tx_symbols_[n].duration0 = TX_START_LOW;
-  this->tx_symbols_[n].level1 = 1;
-  this->tx_symbols_[n].duration1 = TX_START_HIGH;
-  n++;
-  for (size_t i = 0; i < num_blocks; i++) {
+  this->tx_seq_[n++] = {TX_START_LOW, TX_START_HIGH, false, false};  // start bit
+  for (uint8_t i = 0; i < num_blocks; i++) {
     bool eom = (i == num_blocks - 1);
-    // 8 data bits (MSB first), then EOM, then the ACK slot sent as a "1" (line
-    // released, so the addressed device can pull it low to acknowledge — which
-    // shows up in the RX self-capture that follows).
     for (int bit = 9; bit >= 0; bit--) {
-      bool one;
+      bool one, is_ack = false;
       if (bit >= 2)
         one = (blocks[i] >> (bit - 2)) & 1;
       else if (bit == 1)
         one = eom;
-      else
-        one = true;  // ACK slot
-      this->tx_symbols_[n].level0 = 0;
-      this->tx_symbols_[n].duration0 = one ? TX_ONE_LOW : TX_ZERO_LOW;
-      this->tx_symbols_[n].level1 = 1;
-      this->tx_symbols_[n].duration1 = one ? TX_ONE_HIGH : TX_ZERO_HIGH;
+      else {
+        one = true;  // ACK slot: released so the addressed device can pull it low
+        is_ack = true;
+      }
+      this->tx_seq_[n].low_us = one ? TX_ONE_LOW : TX_ZERO_LOW;
+      this->tx_seq_[n].high_us = one ? TX_ONE_HIGH : TX_ZERO_HIGH;
+      this->tx_seq_[n].arbitrate = (i == 0 && one && !is_ack);  // header "1" bits only
+      this->tx_seq_[n].ack_slot = is_ack;
       n++;
     }
   }
+  this->tx_len_ = (uint16_t)n;
+  this->tx_idx_ = 0;
+  this->tx_phase_ = 0;
+  this->tx_arb_lost_ = false;
+  this->tx_ack_low_ = false;
+  this->tx_done_ = false;
+  this->tx_active_ = true;
 
-  rmt_transmit_config_t txc = {};
-  txc.flags.eot_level = 1;  // leave the line released when the frame ends
-  esp_err_t err =
-      rmt_transmit(this->tx_channel_, this->tx_encoder_, this->tx_symbols_, n * sizeof(rmt_symbol_word_t), &txc);
-  if (err == ESP_OK) err = rmt_tx_wait_all_done(this->tx_channel_, 300);
-  if (err != ESP_OK) {
-    ESP_LOGW(TAG, "Transmission failed: %d", (int)err);
+  // Take over the pad (GPIO drives it now) and drive the first low period.
+  gpio_num_t pin = static_cast<gpio_num_t>(this->pin_);
+  gpio_ll_set_level(&GPIO, pin, 0);
+  esp_rom_gpio_connect_out_signal(pin, SIG_GPIO_OUT_IDX, false, false);
+  gptimer_set_raw_count(this->tx_timer_, 0);
+  gptimer_alarm_config_t a = {};
+  a.alarm_count = this->tx_seq_[0].low_us;
+  gptimer_set_alarm_action(this->tx_timer_, &a);
+  gptimer_start(this->tx_timer_);
+}
+
+bool IRAM_ATTR HdmiCec::tx_timer_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *arg) {
+  auto *self = static_cast<HdmiCec *>(arg);
+  gpio_num_t pin = static_cast<gpio_num_t>(self->pin_);
+  const TxBit &sym = self->tx_seq_[self->tx_idx_];
+
+  if (self->tx_phase_ == 0) {
+    // Low period ended → release the line.
+    gpio_ll_set_level(&GPIO, pin, 1);
+    if (sym.arbitrate || sym.ack_slot) {
+      self->tx_phase_ = 1;  // sample after TX_SAMPLE_DELAY
+      gptimer_set_raw_count(timer, 0);
+      gptimer_alarm_config_t a = {};
+      a.alarm_count = TX_SAMPLE_DELAY;
+      gptimer_set_alarm_action(timer, &a);
+    } else {
+      self->tx_phase_ = 2;
+      gptimer_set_raw_count(timer, 0);
+      gptimer_alarm_config_t a = {};
+      a.alarm_count = sym.high_us;
+      gptimer_set_alarm_action(timer, &a);
+    }
     return false;
   }
-  this->frames_sent_++;
-  ESP_LOGD(TAG, "Frame sent to %u (%u blocks)", (unsigned)dest, (unsigned)num_blocks);
+
+  if (self->tx_phase_ == 1) {
+    // Sample point: for a released "1" bit, the line should be high unless
+    // another device is driving it low.
+    int level = gpio_ll_get_level(&GPIO, pin);
+    if (sym.arbitrate && level == 0) {
+      // Lost arbitration: a lower logical address won. Yield the bus at once.
+      self->tx_arb_lost_ = true;
+      GPIO.func_out_sel_cfg[self->pin_].val = self->out_sel_rmt_;  // release (restore RMT idle)
+      gptimer_stop(timer);
+      self->tx_active_ = false;
+      self->tx_done_ = true;
+      return false;
+    }
+    if (sym.ack_slot) self->tx_ack_low_ = (level == 0);
+    self->tx_phase_ = 2;
+    gptimer_set_raw_count(timer, 0);
+    gptimer_alarm_config_t a = {};
+    a.alarm_count = sym.high_us - TX_SAMPLE_DELAY;
+    gptimer_set_alarm_action(timer, &a);
+    return false;
+  }
+
+  // Phase 2: bit complete → next bit, or finish.
+  self->tx_idx_++;
+  if (self->tx_idx_ >= self->tx_len_) {
+    GPIO.func_out_sel_cfg[self->pin_].val = self->out_sel_rmt_;  // idle = line released
+    gptimer_stop(timer);
+    self->tx_active_ = false;
+    self->tx_done_ = true;
+    return false;
+  }
+  gpio_ll_set_level(&GPIO, pin, 0);  // start the next bit's low period
+  self->tx_phase_ = 0;
+  gptimer_set_raw_count(timer, 0);
+  gptimer_alarm_config_t a = {};
+  a.alarm_count = self->tx_seq_[self->tx_idx_].low_us;
+  gptimer_set_alarm_action(timer, &a);
+  return false;
+}
+
+// Called from loop(): never blocks. Handles the frame that just finished
+// (retransmit on NACK/collision) and starts the next queued frame when the bus
+// is free.
+void HdmiCec::pump_tx_() {
+  if (this->tx_active_) return;  // the ISR is still driving a frame
+  uint32_t now = millis();
+
+  if (this->tx_in_flight_) {
+    this->tx_in_flight_ = false;
+    TxJob &job = this->tx_queue_[this->tx_q_head_];
+    uint8_t dest = (uint8_t)(job.blocks[0] & 0x0F);
+    bool broadcast = (dest == 0x0F);
+    // Directed: acknowledged if the follower pulled the ACK slot low. Broadcast:
+    // acknowledged unless a follower rejected it (pulled low).
+    bool acked = broadcast ? !this->tx_ack_low_ : this->tx_ack_low_;
+    bool retry = this->tx_arb_lost_ || (!acked && this->retransmit_ > 0);
+
+    if (retry && job.attempts + 1 < this->retransmit_) {
+      job.attempts++;
+      this->retransmits_++;
+      // Back off before retrying; a lower address waits less (soft arbitration).
+      this->tx_backoff_until_ = now + 45 + (uint32_t)this->address_ * 3;
+      if (this->tx_arb_lost_) ESP_LOGD(TAG, "Lost arbitration to %u, will retry", (unsigned)dest);
+    } else {
+      if (retry) ESP_LOGW(TAG, "Frame to %u gave up after %u attempts", (unsigned)dest, (unsigned)(job.attempts + 1));
+      this->frames_sent_++;
+      this->tx_q_head_ = (uint8_t)((this->tx_q_head_ + 1) % 8);
+    }
+    ESP_LOGD(TAG, "TX complete -> %u acked=%d arb_lost=%d", (unsigned)dest, acked, (int)this->tx_arb_lost_);
+  }
+
+  if (this->tx_q_head_ == this->tx_q_tail_) return;  // queue empty
+  if (now < this->tx_backoff_until_) return;
+  if (!this->bus_free_()) return;
+  TxJob &job = this->tx_queue_[this->tx_q_head_];
+  this->tx_in_flight_ = true;
+  this->start_tx_current_(job.blocks, job.num_blocks);
+}
+
+bool HdmiCec::transmit_sync_(uint8_t initiator, uint8_t dest, const std::vector<uint8_t> &payload, bool *acked) {
+  // Boot-time only (address negotiation): the main loop is not running yet, so
+  // blocking here is fine. Never used once loop() is pumping the async queue.
+  if (this->tx_timer_ == nullptr || this->monitor_mode_) return false;
+  for (int i = 0; i < 40 && !this->bus_free_(); i++) vTaskDelay(pdMS_TO_TICKS(5));
+  if (!this->bus_free_()) return false;
+
+  uint8_t blocks[16];
+  uint8_t nb = 0;
+  blocks[nb++] = (uint8_t)(((initiator & 0x0F) << 4) | (dest & 0x0F));
+  for (uint8_t b : payload) blocks[nb++] = b;
+  this->start_tx_current_(blocks, nb);
+  for (int i = 0; i < 40 && this->tx_active_; i++) vTaskDelay(pdMS_TO_TICKS(5));
+
+  bool broadcast = (dest == 0x0F);
+  if (acked != nullptr) *acked = broadcast ? !this->tx_ack_low_ : this->tx_ack_low_;
   return true;
 }
 
@@ -730,6 +841,7 @@ void HdmiCec::loop() {
     this->handle_housekeeping_(frame);
   }
 
+  this->pump_tx_();
   this->poll_registry_();
 }
 
@@ -767,15 +879,6 @@ void HdmiCec::decode_capture_(const rmt_symbol_word_t *syms, size_t n) {
     // Directed frame: an ACK is the line being pulled low (bit read as "0").
     // On a broadcast the meaning is inverted — low means "rejected".
     bool acked = (dest == 0xF) ? !last_ack_low : last_ack_low;
-
-    // Self-capture ACK detection: if this is the frame tx_and_confirm_() is
-    // waiting on (same header, and same opcode when it has one), record its
-    // acknowledgement so the sender can decide whether to retransmit.
-    if (this->tx_wait_ && bytes[0] == this->tx_wait_header_ &&
-        (!this->tx_wait_has_op_ || (num_bytes > 1 && bytes[1] == this->tx_wait_op_))) {
-      this->tx_acked_ = acked;
-      this->tx_seen_ = true;
-    }
 
     ESP_LOGI(TAG, "CEC frame [%s] initiator=%u destination=%u eom=%d ack=%s", hex, initiator, dest, last_eom,
              acked ? "yes" : "no");
